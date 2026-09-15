@@ -1,0 +1,20 @@
+services:
+  monitor:
+    # На VPS образ тянется из GHCR (переменная IMAGE в .env),
+    # локально можно собрать свой: docker compose up -d --build
+    image: ${IMAGE:-claude-usage-monitor:local}
+    build: .
+    container_name: claude-usage-monitor
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # Здесь переживают рестарт обновлённые OAuth-токены
+      - monitor-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  monitor-data:
