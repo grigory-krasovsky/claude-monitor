@@ -88,28 +88,31 @@ curl, эту переменную сама не читает, поэтому п�
 
 ## Деплой на VPS
 
-Подготовка сервера (один раз):
+Готовить сервер вручную не нужно — на нём достаточно Docker с плагином
+`docker compose` (v2, без дефиса) и пользователя, имеющего к нему доступ.
+Пайплайн на push в `master` делает всё остальное: сборка и тесты → образ в GHCR →
+ssh на сервер, где создаётся каталог, копируется `docker-compose.yml`,
+генерируется `.env` и выполняется `docker compose pull && up -d`.
 
-```bash
-mkdir -p /opt/claude-usage-monitor && cd /opt/claude-usage-monitor
-curl -O https://raw.githubusercontent.com/OWNER/claude-usage-monitor/master/docker-compose.yml
-nano .env   # содержимое .env.example, заполненное своими значениями
-```
+`.env` на сервере целиком пересобирается из секретов при каждом деплое, так что
+единственный источник правды — GitHub. Править его на сервере бесполезно,
+изменения затрутся следующим push.
 
-В `docker-compose.yml` на сервере строку `build: .` можно убрать — там образ только тянется.
-
-Секреты репозитория для GitHub Actions:
+Обязательные секреты репозитория:
 
 | Секрет | Назначение |
 |---|---|
 | `VPS_HOST` | адрес сервера |
 | `VPS_USER` | пользователь ssh |
 | `VPS_PASSWORD` | пароль ssh |
-| `VPS_PORT` | порт ssh, если не 22 |
-| `VPS_PATH` | каталог деплоя, если не `/opt/claude-usage-monitor` |
+| `TELEGRAM_BOT_TOKEN` | токен от @BotFather |
+| `TELEGRAM_CHAT_ID` | чат для алертов |
+| `ANTHROPIC_ACCESS_TOKEN` | токен из `claude setup-token` |
 
-Пайплайн на push в `master`: сборка и тесты → публикация образа в GHCR →
-ssh на сервер, `docker compose pull && docker compose up -d`.
+Необязательные — задаются, только если нужно отойти от значений по умолчанию:
+`VPS_PORT` (22), `VPS_PATH` (`/opt/claude-usage-monitor`), `POLL_INTERVAL` (`3m`),
+`THRESHOLDS` (`50,75,90,95`), `TIMEZONE` (`Europe/Moscow`), `HTTPS_PROXY` (пусто),
+`ANTHROPIC_REFRESH_TOKEN` (пусто).
 
 ## Локальная разработка
 

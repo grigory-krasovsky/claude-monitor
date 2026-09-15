@@ -11,3 +11,4 @@ HELP.md
 README.md
 CLAUDE.md
 docker-compose.yml
+docker-compose.override.yml

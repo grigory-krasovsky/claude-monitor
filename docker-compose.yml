@@ -1,9 +1,8 @@
 services:
   monitor:
-    # На VPS образ тянется из GHCR (переменная IMAGE в .env),
-    # локально можно собрать свой: docker compose up -d --build
+    # На VPS образ тянется из GHCR: IMAGE прописывает деплой в .env.
+    # Локальная сборка живёт в docker-compose.override.yml — на сервер он не копируется.
     image: ${IMAGE:-claude-usage-monitor:local}
-    build: .
     container_name: claude-usage-monitor
     restart: unless-stopped
     env_file: .env

@@ -68,22 +68,60 @@ jobs:
     permissions:
       contents: read
       packages: read
+    env:
+      DEPLOY_PATH: ${{ secrets.VPS_PATH || '/opt/claude-usage-monitor' }}
     steps:
-      - name: docker compose pull && up на сервере
+      - uses: actions/checkout@v4
+
+      - name: Каталог деплоя
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: IMAGE_REF,GHCR_USER,GHCR_TOKEN,DEPLOY_PATH
+          envs: DEPLOY_PATH
+          script_stop: true
+          script: mkdir -p "$DEPLOY_PATH"
+
+      - name: Копирование docker-compose.yml
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          source: docker-compose.yml
+          target: ${{ secrets.VPS_PATH || '/opt/claude-usage-monitor' }}
+
+      - name: Генерация .env и запуск
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,THRESHOLDS,TZ_NAME,PROXY
           script_stop: true
           script: |
             set -e
             cd "$DEPLOY_PATH"
+            # .env целиком пересобирается из секретов: источник правды — GitHub, не сервер
+            cat > .env <<EOF
+            IMAGE=$IMAGE_REF
+            TELEGRAM_BOT_TOKEN=$TG_TOKEN
+            TELEGRAM_CHAT_ID=$TG_CHAT
+            ANTHROPIC_ACCESS_TOKEN=$ANTHROPIC_TOKEN
+            ANTHROPIC_REFRESH_TOKEN=$ANTHROPIC_REFRESH
+            POLL_INTERVAL=$POLL
+            THRESHOLDS=$THRESHOLDS
+            TIMEZONE=$TZ_NAME
+            NOTIFY_ON_START=true
+            NOTIFY_ON_RESET=true
+            HTTPS_PROXY=$PROXY
+            EOF
+            chmod 600 .env
             echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-            # Фиксируем конкретный тег в .env, чтобы compose поднял именно эту сборку
-            grep -q '^IMAGE=' .env && sed -i "s#^IMAGE=.*#IMAGE=$IMAGE_REF#" .env || echo "IMAGE=$IMAGE_REF" >> .env
             docker compose pull
             docker compose up -d
             docker image prune -f
@@ -91,4 +129,11 @@ jobs:
           IMAGE_REF: ${{ needs.image.outputs.image }}:${{ github.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEPLOY_PATH: ${{ secrets.VPS_PATH || '/opt/claude-usage-monitor' }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_TOKEN: ${{ secrets.ANTHROPIC_ACCESS_TOKEN }}
+          ANTHROPIC_REFRESH: ${{ secrets.ANTHROPIC_REFRESH_TOKEN }}
+          POLL: ${{ secrets.POLL_INTERVAL || '3m' }}
+          THRESHOLDS: ${{ secrets.THRESHOLDS || '50,75,90,95' }}
+          TZ_NAME: ${{ secrets.TIMEZONE || 'Europe/Moscow' }}
+          PROXY: ${{ secrets.HTTPS_PROXY || '' }}
