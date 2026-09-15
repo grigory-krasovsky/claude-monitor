@@ -69,7 +69,10 @@ jobs:
       contents: read
       packages: read
     env:
-      DEPLOY_PATH: ${{ secrets.VPS_PATH || '/opt/claude-usage-monitor' }}
+      # Путь относительный: ssh-сессия стартует в домашнем каталоге, а туда
+      # пользователь пишет всегда — в отличие от /opt, где нужен root.
+      # VPS_PATH можно задать абсолютным, если есть права на запись.
+      DEPLOY_PATH: ${{ secrets.VPS_PATH || 'claude-usage-monitor' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,7 +84,6 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
           envs: DEPLOY_PATH
-          script_stop: true
           script: mkdir -p "$DEPLOY_PATH"
 
       - name: Копирование docker-compose.yml
@@ -92,7 +94,7 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
           source: docker-compose.yml
-          target: ${{ secrets.VPS_PATH || '/opt/claude-usage-monitor' }}
+          target: ${{ secrets.VPS_PATH || 'claude-usage-monitor' }}
 
       - name: Генерация .env и запуск
         uses: appleboy/ssh-action@v1
@@ -102,7 +104,6 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
           envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,THRESHOLDS,TZ_NAME,PROXY
-          script_stop: true
           script: |
             set -e
             cd "$DEPLOY_PATH"

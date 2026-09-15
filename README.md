@@ -109,8 +109,12 @@ ssh на сервер, где создаётся каталог, копируе�
 | `TELEGRAM_CHAT_ID` | чат для алертов |
 | `ANTHROPIC_ACCESS_TOKEN` | токен из `claude setup-token` |
 
+Деплой идёт в `~/claude-usage-monitor` — домашний каталог доступен на запись любому
+пользователю, в отличие от `/opt`. Абсолютный путь можно задать через `VPS_PATH`,
+если у пользователя есть туда права.
+
 Необязательные — задаются, только если нужно отойти от значений по умолчанию:
-`VPS_PORT` (22), `VPS_PATH` (`/opt/claude-usage-monitor`), `POLL_INTERVAL` (`3m`),
+`VPS_PORT` (22), `VPS_PATH` (`claude-usage-monitor`), `POLL_INTERVAL` (`3m`),
 `THRESHOLDS` (`50,75,90,95`), `TIMEZONE` (`Europe/Moscow`), `HTTPS_PROXY` (пусто),
 `ANTHROPIC_REFRESH_TOKEN` (пусто).
 
