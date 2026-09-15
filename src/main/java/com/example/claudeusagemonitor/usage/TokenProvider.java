@@ -42,6 +42,13 @@ public class TokenProvider {
     /** Обновляем заранее, чтобы не поймать 401 в середине опроса. */
     private static final Duration EXPIRY_MARGIN = Duration.ofMinutes(5);
 
+    /**
+     * Пауза после неудачного обновления. Эндпоинт отвечает 429 при слишком частых
+     * обменах, а опрос лимитов идёт раз в три минуты — без паузы протухший токен
+     * означал бы два десятка запросов в час к тому, кто уже попросил подождать.
+     */
+    private static final Duration REFRESH_BACKOFF = Duration.ofMinutes(15);
+
     private final MonitorProperties properties;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -49,6 +56,7 @@ public class TokenProvider {
     private String accessToken = "";
     private String refreshToken = "";
     private Instant expiresAt;
+    private Instant refreshBlockedUntil;
 
     public TokenProvider(MonitorProperties properties, HttpClient httpClient, ObjectMapper objectMapper) {
         this.properties = properties;
@@ -94,6 +102,20 @@ public class TokenProvider {
     }
 
     private boolean refresh() {
+        if (refreshBlockedUntil != null && Instant.now().isBefore(refreshBlockedUntil)) {
+            log.debug("Обновление токена отложено до {}", refreshBlockedUntil);
+            return false;
+        }
+        if (attemptRefresh()) {
+            refreshBlockedUntil = null;
+            return true;
+        }
+        refreshBlockedUntil = Instant.now().plus(REFRESH_BACKOFF);
+        log.warn("Следующая попытка обновления токена не раньше {}", refreshBlockedUntil);
+        return false;
+    }
+
+    private boolean attemptRefresh() {
         try {
             ObjectNode body = objectMapper.createObjectNode();
             body.put("grant_type", "refresh_token");

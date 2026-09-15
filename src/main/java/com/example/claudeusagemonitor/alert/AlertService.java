@@ -92,6 +92,7 @@ public class AlertService {
             state = new WindowState(window.resetKey());
             states.put(kind, state);
             if (windowWasUsed && notifyReset) {
+                log.info("{} сброшено, новое окно до {}", kind.title(), window.resetsAt());
                 telegramClient.sendToConfiguredChat(formatter.windowReset(window));
             }
         }
