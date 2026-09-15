@@ -7,7 +7,8 @@ import com.example.claudeusagemonitor.usage.LimitWindow;
 import com.example.claudeusagemonitor.usage.TokenProvider;
 import com.example.claudeusagemonitor.usage.UsageClient;
 import com.example.claudeusagemonitor.usage.UsageSnapshot;
-import java.util.HashMap;
+import com.example.claudeusagemonitor.usage.WindowKind;
+import java.util.EnumMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,9 +30,6 @@ public class AlertService {
 
     private static final Logger log = LoggerFactory.getLogger(AlertService.class);
 
-    private static final String FIVE_HOUR_TITLE = "Пятичасовой лимит";
-    private static final String SEVEN_DAY_TITLE = "Недельный лимит";
-
     private final MonitorProperties properties;
     private final UsageClient usageClient;
     private final TelegramClient telegramClient;
@@ -39,7 +37,7 @@ public class AlertService {
     private final TokenProvider tokenProvider;
 
     /** Состояние алертов по каждому окну: ключ сброса и максимальный отправленный порог. */
-    private final Map<String, WindowState> states = new HashMap<>();
+    private final Map<WindowKind, WindowState> states = new EnumMap<>(WindowKind.class);
 
     /** Чтобы не спамить в чат одной и той же ошибкой каждые три минуты. */
     private String lastReportedError;
@@ -80,19 +78,19 @@ public class AlertService {
         }
         lastReportedError = null;
 
-        check("five_hour", FIVE_HOUR_TITLE, snapshot.fiveHour(), properties.isNotifyOnReset());
-        check("seven_day", SEVEN_DAY_TITLE, snapshot.sevenDay(), false);
+        check(WindowKind.FIVE_HOUR, snapshot.fiveHour(), properties.isNotifyOnReset());
+        check(WindowKind.SEVEN_DAY, snapshot.sevenDay(), false);
     }
 
-    private void check(String key, String title, LimitWindow window, boolean notifyReset) {
+    private void check(WindowKind kind, LimitWindow window, boolean notifyReset) {
         if (window == null) {
             return;
         }
-        WindowState state = states.get(key);
+        WindowState state = states.get(kind);
         if (state == null || !state.resetKey.equals(window.resetKey())) {
             boolean windowWasUsed = state != null && state.maxNotified > 0;
             state = new WindowState(window.resetKey());
-            states.put(key, state);
+            states.put(kind, state);
             if (windowWasUsed && notifyReset) {
                 telegramClient.sendToConfiguredChat(formatter.windowReset(window));
             }
@@ -100,8 +98,8 @@ public class AlertService {
 
         int reached = highestThresholdReached(window.percent());
         if (reached > state.maxNotified) {
-            log.info("{}: {}% — порог {}%", title, Math.round(window.percent()), reached);
-            telegramClient.sendToConfiguredChat(formatter.thresholdAlert(title, window, reached));
+            log.info("{}: {}% — порог {}%", kind.title(), Math.round(window.percent()), reached);
+            telegramClient.sendToConfiguredChat(formatter.thresholdAlert(kind, window, reached));
             state.maxNotified = reached;
         }
     }

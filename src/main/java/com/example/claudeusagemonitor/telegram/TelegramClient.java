@@ -44,6 +44,33 @@ public class TelegramClient {
         return StringUtils.hasText(properties.getTelegram().getToken());
     }
 
+    /**
+     * Прописывает команды бота — после этого в чате появляется кнопка «Меню»
+     * со списком, а Telegram начинает подсказывать команды при вводе слэша.
+     */
+    public void registerCommands() {
+        ObjectNode body = objectMapper.createObjectNode();
+        var commands = objectMapper.createArrayNode();
+        commands.add(command("status", "Текущая утилизация лимитов"));
+        commands.add(command("chatid", "ID этого чата"));
+        commands.add(command("help", "Справка"));
+        body.set("commands", commands);
+
+        JsonNode response = call("setMyCommands", body, Duration.ofSeconds(20));
+        if (response != null && response.path("ok").asBoolean(false)) {
+            log.info("Команды бота зарегистрированы");
+        } else {
+            log.warn("Не удалось зарегистрировать команды бота: {}", response);
+        }
+    }
+
+    private ObjectNode command(String name, String description) {
+        ObjectNode node = objectMapper.createObjectNode();
+        node.put("command", name);
+        node.put("description", description);
+        return node;
+    }
+
     /** Отправляет сообщение в чат, заданный в настройках. Без chat-id молча ничего не делает. */
     public void sendToConfiguredChat(String text) {
         String chatId = properties.getTelegram().getChatId();

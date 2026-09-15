@@ -40,6 +40,7 @@ public class BotPoller implements SmartLifecycle {
             log.warn("Токен Telegram не задан — опрос апдейтов не запущен");
             return;
         }
+        telegramClient.registerCommands();
         running = true;
         thread = new Thread(this::pollLoop, "telegram-poller");
         thread.setDaemon(false);
