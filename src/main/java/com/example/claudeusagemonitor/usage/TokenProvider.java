@@ -36,7 +36,14 @@ public class TokenProvider {
 
     private static final Logger log = LoggerFactory.getLogger(TokenProvider.class);
 
-    private static final String TOKEN_URL = "https://claude.ai/v1/oauth/token";
+    /**
+     * Только этот хост обслуживает обмен токена. Варианты на {@code claude.ai} и
+     * {@code console.anthropic.com}, которые попадаются в чужих проектах, отвечают
+     * 429 rate_limit_error на любой запрос, включая заведомо недействительный токен,
+     * — то есть не являются рабочим эндпоинтом вовсе, а 429 там сбивает с толку,
+     * маскируясь под временное ограничение.
+     */
+    private static final String TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
     private static final String CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
     /** Обновляем заранее, чтобы не поймать 401 в середине опроса. */

@@ -22,6 +22,15 @@ the endpoint's TTL is 180 s (polling faster invites rate limits), and it answers
 `403 Request not allowed` from geo-blocked regions — hence the optional
 `HTTPS_PROXY` support in `HttpConfig`.
 
+Token refresh goes to `POST https://api.anthropic.com/v1/oauth/token`
+(`grant_type=refresh_token`, `client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e`).
+Do not "fix" that host: the `claude.ai` and `console.anthropic.com` variants that
+circulate in other projects answer `429 rate_limit_error` to every request,
+including one carrying a deliberately invalid token, so a 429 there means wrong
+host rather than throttling. Access tokens live 8 h and the refresh token is
+rotated on every exchange, which is why a VPS needs its own `claude` login
+(`CLAUDE_CONFIG_DIR`) rather than a copy of the developer's credentials.
+
 ## Stack
 
 - Spring Boot 4.1.1 (parent POM), Java 17, Maven via the bundled wrapper
