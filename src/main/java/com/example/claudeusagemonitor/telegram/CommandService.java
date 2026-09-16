@@ -1,7 +1,7 @@
 package com.example.claudeusagemonitor.telegram;
 
+import com.example.claudeusagemonitor.alert.AlertService;
 import com.example.claudeusagemonitor.config.MonitorProperties;
-import com.example.claudeusagemonitor.usage.UsageClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -17,23 +17,22 @@ public class CommandService {
     private static final String HELP = """
             <b>Claude Usage Monitor</b>
 
-            /status — текущая утилизация лимитов
+            /status — пересоздать статусное сообщение
             /chatid — идентификатор этого чата
             /help — эта справка
 
-            Алерты приходят автоматически при пересечении порогов утилизации.""";
+            Статус обновляется сам каждые 15 секунд и всегда остаётся последним
+            сообщением в чате. При пересечении порогов утилизации приходит алерт,
+            предыдущий при этом убирается.""";
 
     private final MonitorProperties properties;
-    private final UsageClient usageClient;
+    private final AlertService alertService;
     private final TelegramClient telegramClient;
-    private final MessageFormatter formatter;
 
-    public CommandService(MonitorProperties properties, UsageClient usageClient,
-                          TelegramClient telegramClient, MessageFormatter formatter) {
+    public CommandService(MonitorProperties properties, AlertService alertService, TelegramClient telegramClient) {
         this.properties = properties;
-        this.usageClient = usageClient;
+        this.alertService = alertService;
         this.telegramClient = telegramClient;
-        this.formatter = formatter;
     }
 
     /** Разбирает апдейт Telegram и отвечает на известные команды. */
@@ -49,19 +48,23 @@ public class CommandService {
         log.info("Команда {} из чата {}", command, chatId);
 
         switch (command) {
-            case "/status" -> telegramClient.sendMessage(chatId, status());
+            case "/status" -> status(chatId);
             case "/chatid" -> telegramClient.sendMessage(chatId, chatIdReply(chatId));
             case "/start", "/help" -> telegramClient.sendMessage(chatId, HELP);
             default -> { /* прочие сообщения игнорируем */ }
         }
     }
 
-    private String status() {
-        try {
-            return formatter.status(usageClient.fetch());
-        } catch (RuntimeException e) {
-            log.error("Не удалось получить лимиты: {}", e.toString());
-            return "⚠️ Не удалось получить данные: " + e.getMessage();
+    /**
+     * В основном чате команда пересоздаёт живое статусное сообщение, чтобы оно
+     * снова оказалось последним. В остальных чатах отвечаем разовым снимком:
+     * вести там самообновляющееся сообщение незачем.
+     */
+    private void status(String chatId) {
+        if (chatId.equals(properties.getTelegram().getChatId())) {
+            alertService.repostStatus();
+        } else {
+            telegramClient.sendMessage(chatId, alertService.statusText());
         }
     }
 

@@ -2,13 +2,16 @@ package com.example.claudeusagemonitor.alert;
 
 import com.example.claudeusagemonitor.config.MonitorProperties;
 import com.example.claudeusagemonitor.telegram.MessageFormatter;
+import com.example.claudeusagemonitor.telegram.StatusBoard;
 import com.example.claudeusagemonitor.telegram.TelegramClient;
 import com.example.claudeusagemonitor.usage.LimitWindow;
 import com.example.claudeusagemonitor.usage.TokenProvider;
 import com.example.claudeusagemonitor.usage.UsageClient;
 import com.example.claudeusagemonitor.usage.UsageSnapshot;
 import com.example.claudeusagemonitor.usage.WindowKind;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,50 +21,51 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 /**
- * Периодически опрашивает лимиты и шлёт алерты при пересечении порогов.
+ * Опрашивает лимиты и ведёт статусное сообщение в чате.
  *
- * <p>Каждый порог срабатывает не более одного раза за окно: состояние привязано
- * к времени сброса, и когда Anthropic выдаёт новое {@code resets_at}, счётчик
- * обнуляется. Интервал опроса по умолчанию — 3 минуты, это TTL самого эндпоинта;
- * чаще ходить бессмысленно и чревато rate limit.
+ * <p>Опрос и отрисовка разведены намеренно. За данными ходим раз в три минуты — это TTL
+ * эндпоинта Anthropic, чаще нельзя. А статусное сообщение переписываем раз в пятнадцать
+ * секунд из последнего среза: обратный отсчёт и шкала прошедшего времени при этом идут
+ * непрерывно, хотя проценты токенов обновляются реже.
+ *
+ * <p>Каждый порог срабатывает не более одного раза за окно: состояние привязано к времени
+ * сброса, и когда Anthropic выдаёт новое {@code resets_at}, счётчик обнуляется, а алерт
+ * снимается.
  */
 @Service
 public class AlertService {
 
     private static final Logger log = LoggerFactory.getLogger(AlertService.class);
 
+    /** Сколько опросов подряд должны провалиться, прежде чем жаловаться в чат. */
+    private static final int FAILURES_BEFORE_ALERT = 2;
+
     private final MonitorProperties properties;
     private final UsageClient usageClient;
     private final TelegramClient telegramClient;
+    private final StatusBoard board;
     private final MessageFormatter formatter;
     private final TokenProvider tokenProvider;
 
     /** Состояние алертов по каждому окну: ключ сброса и максимальный отправленный порог. */
     private final Map<WindowKind, WindowState> states = new EnumMap<>(WindowKind.class);
 
-    /** Чтобы не спамить в чат одной и той же ошибкой каждые три минуты. */
-    private String lastReportedError;
+    private volatile UsageSnapshot lastSnapshot;
+    private int consecutiveFailures;
 
     public AlertService(MonitorProperties properties, UsageClient usageClient, TelegramClient telegramClient,
-                        MessageFormatter formatter, TokenProvider tokenProvider) {
+                        StatusBoard board, MessageFormatter formatter, TokenProvider tokenProvider) {
         this.properties = properties;
         this.usageClient = usageClient;
         this.telegramClient = telegramClient;
+        this.board = board;
         this.formatter = formatter;
         this.tokenProvider = tokenProvider;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
-        if (!properties.isNotifyOnStart() || !ready()) {
-            return;
-        }
-        try {
-            telegramClient.sendToConfiguredChat("🚀 <b>Монитор запущен</b>\n\n"
-                    + formatter.status(usageClient.fetch()));
-        } catch (RuntimeException e) {
-            log.error("Стартовое сообщение не отправлено: {}", e.toString());
-        }
+        poll();
     }
 
     @Scheduled(initialDelayString = "${monitor.poll-interval}", fixedDelayString = "${monitor.poll-interval}")
@@ -73,34 +77,66 @@ public class AlertService {
         try {
             snapshot = usageClient.fetch();
         } catch (RuntimeException e) {
-            reportError(e.getMessage());
+            onFailure(e.getMessage());
             return;
         }
-        lastReportedError = null;
+        lastSnapshot = snapshot;
+        consecutiveFailures = 0;
+        board.clear(StatusBoard.AlertKind.FAILURE);
 
-        check(WindowKind.FIVE_HOUR, snapshot.fiveHour(), properties.isNotifyOnReset());
-        check(WindowKind.SEVEN_DAY, snapshot.sevenDay(), false);
+        List<String> triggered = new ArrayList<>();
+        collect(WindowKind.FIVE_HOUR, snapshot.fiveHour(), triggered);
+        collect(WindowKind.SEVEN_DAY, snapshot.sevenDay(), triggered);
+
+        if (triggered.isEmpty()) {
+            board.render(formatter.status(snapshot));
+        } else {
+            // Оба окна могут пробить порог одним опросом — тогда это один алерт, а не два
+            board.raise(StatusBoard.AlertKind.THRESHOLD,
+                    String.join("\n\n", triggered), formatter.status(snapshot));
+        }
     }
 
-    private void check(WindowKind kind, LimitWindow window, boolean notifyReset) {
+    /** Перерисовка статуса между опросами: двигает обратный отсчёт и шкалу времени. */
+    @Scheduled(initialDelayString = "${monitor.render-interval}", fixedDelayString = "${monitor.render-interval}")
+    public void render() {
+        UsageSnapshot snapshot = lastSnapshot;
+        if (ready() && snapshot != null) {
+            board.render(formatter.status(snapshot));
+        }
+    }
+
+    /** Пересоздаёт статусное сообщение последним в чате — реакция на /status. */
+    public void repostStatus() {
+        board.repost(statusText());
+    }
+
+    /** Текст статуса из последнего среза. Своего запроса к API не делает. */
+    public String statusText() {
+        UsageSnapshot snapshot = lastSnapshot;
+        return snapshot == null
+                ? "⏳ Данных пока нет — первый опрос ещё не прошёл."
+                : formatter.status(snapshot);
+    }
+
+    private void collect(WindowKind kind, LimitWindow window, List<String> triggered) {
         if (window == null) {
             return;
         }
         WindowState state = states.get(kind);
         if (state == null || !state.resetKey.equals(window.resetKey())) {
             boolean windowWasUsed = state != null && state.maxNotified > 0;
-            state = new WindowState(window.resetKey());
-            states.put(kind, state);
-            if (windowWasUsed && notifyReset) {
+            states.put(kind, state = new WindowState(window.resetKey()));
+            if (windowWasUsed) {
                 log.info("{} сброшено, новое окно до {}", kind.title(), window.resetsAt());
-                telegramClient.sendToConfiguredChat(formatter.windowReset(window));
+                board.clear(StatusBoard.AlertKind.THRESHOLD);
             }
         }
 
         int reached = highestThresholdReached(window.percent());
         if (reached > state.maxNotified) {
             log.info("{}: {}% — порог {}%", kind.title(), Math.round(window.percent()), reached);
-            telegramClient.sendToConfiguredChat(formatter.thresholdAlert(kind, window, reached));
+            triggered.add(formatter.thresholdAlert(kind, window, reached));
             state.maxNotified = reached;
         }
     }
@@ -113,11 +149,19 @@ public class AlertService {
                 .orElse(0);
     }
 
-    private void reportError(String message) {
+    private void onFailure(String message) {
         log.error("Опрос лимитов не удался: {}", message);
-        if (!message.equals(lastReportedError)) {
-            lastReportedError = message;
-            telegramClient.sendToConfiguredChat("⚠️ <b>Монитор не может получить данные</b>\n" + message);
+        consecutiveFailures++;
+        // Одиночный сетевой сбой не повод будить пользователя — ждём подтверждения
+        if (consecutiveFailures != FAILURES_BEFORE_ALERT) {
+            return;
+        }
+        String alert = "⚠️ <b>Монитор не может получить данные</b>\n" + message;
+        UsageSnapshot snapshot = lastSnapshot;
+        if (snapshot == null) {
+            board.raise(StatusBoard.AlertKind.FAILURE, alert, "Данных пока нет.");
+        } else {
+            board.raise(StatusBoard.AlertKind.FAILURE, alert, formatter.status(snapshot));
         }
     }
 

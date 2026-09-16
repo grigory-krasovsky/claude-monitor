@@ -103,7 +103,7 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,THRESHOLDS,TZ_NAME,PROXY
+          envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,RENDER,THRESHOLDS,TZ_NAME,PROXY
           script: |
             set -e
             cd "$DEPLOY_PATH"
@@ -115,10 +115,9 @@ jobs:
             ANTHROPIC_ACCESS_TOKEN=$ANTHROPIC_TOKEN
             ANTHROPIC_REFRESH_TOKEN=$ANTHROPIC_REFRESH
             POLL_INTERVAL=$POLL
+            RENDER_INTERVAL=$RENDER
             THRESHOLDS=$THRESHOLDS
             TIMEZONE=$TZ_NAME
-            NOTIFY_ON_START=true
-            NOTIFY_ON_RESET=true
             HTTPS_PROXY=$PROXY
             EOF
             chmod 600 .env
@@ -135,6 +134,7 @@ jobs:
           ANTHROPIC_TOKEN: ${{ secrets.ANTHROPIC_ACCESS_TOKEN }}
           ANTHROPIC_REFRESH: ${{ secrets.ANTHROPIC_REFRESH_TOKEN }}
           POLL: ${{ secrets.POLL_INTERVAL || '3m' }}
+          RENDER: ${{ secrets.RENDER_INTERVAL || '15s' }}
           THRESHOLDS: ${{ secrets.THRESHOLDS || '50,75,90,95' }}
           TZ_NAME: ${{ secrets.TIMEZONE || 'Europe/Moscow' }}
           PROXY: ${{ secrets.HTTPS_PROXY || '' }}

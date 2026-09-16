@@ -37,23 +37,29 @@ public class MessageFormatter {
         this.properties = properties;
     }
 
-    /** Полный статус по обоим окнам — ответ на /status. */
+    /** Полный статус по обоим окнам. Это же сообщение переписывается на месте раз в 15 секунд. */
     public String status(UsageSnapshot snapshot) {
         StringBuilder sb = new StringBuilder(block(WindowKind.FIVE_HOUR, snapshot.fiveHour()));
         if (snapshot.sevenDay() != null) {
             sb.append("\n\n").append(block(WindowKind.SEVEN_DAY, snapshot.sevenDay()));
         }
+        // Шкала времени идёт непрерывно, а проценты токенов тянутся раз в три минуты —
+        // возраст данных показываем явно, чтобы разница не выглядела расхождением.
+        sb.append("\n\n<i>данные ").append(age(snapshot.capturedAt())).append("</i>");
         return sb.toString();
+    }
+
+    private static String age(Instant capturedAt) {
+        long seconds = Math.max(0, Duration.between(capturedAt, Instant.now()).toSeconds());
+        if (seconds < 60) {
+            return seconds + " сек назад";
+        }
+        return Duration.ofSeconds(seconds).toMinutes() + " мин назад";
     }
 
     /** Уведомление о пересечении порога. */
     public String thresholdAlert(WindowKind kind, LimitWindow window, int threshold) {
         return "%s <b>Пройден порог %d%%</b>\n\n%s".formatted(icon(window.percent()), threshold, block(kind, window));
-    }
-
-    /** Уведомление о старте нового пятичасового окна. */
-    public String windowReset(LimitWindow window) {
-        return "♻️ <b>Пятичасовое окно сброшено</b>\nЛимит снова доступен.\n" + resetLine(window, true);
     }
 
     /** Блок из заголовка, двух шкал и вердикта по темпу. */

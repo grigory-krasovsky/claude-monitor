@@ -20,12 +20,6 @@ public class MonitorProperties {
     /** Часовой пояс для отображения времени сброса окна. */
     private ZoneId timezone = ZoneId.of("Europe/Moscow");
 
-    /** Слать ли сообщение о старте монитора. */
-    private boolean notifyOnStart = true;
-
-    /** Слать ли сообщение о сбросе пятичасового окна. */
-    private boolean notifyOnReset = true;
-
     public Anthropic getAnthropic() {
         return anthropic;
     }
@@ -56,22 +50,6 @@ public class MonitorProperties {
 
     public void setTimezone(ZoneId timezone) {
         this.timezone = timezone;
-    }
-
-    public boolean isNotifyOnStart() {
-        return notifyOnStart;
-    }
-
-    public void setNotifyOnStart(boolean notifyOnStart) {
-        this.notifyOnStart = notifyOnStart;
-    }
-
-    public boolean isNotifyOnReset() {
-        return notifyOnReset;
-    }
-
-    public void setNotifyOnReset(boolean notifyOnReset) {
-        this.notifyOnReset = notifyOnReset;
     }
 
     /** Доступ к недокументированному эндпоинту Anthropic /api/oauth/usage. */
@@ -131,6 +109,13 @@ public class MonitorProperties {
         /** Чат, куда шлются алерты. Если пусто — алерты не отправляются, но команды работают. */
         private String chatId = "";
 
+        /**
+         * Файл с идентификаторами статусного сообщения и алерта. Должен лежать на volume:
+         * без него каждый рестарт терял бы ссылку на своё сообщение и оставлял его
+         * в чате мёртвым, создавая рядом новое.
+         */
+        private String stateFile = "/data/board.json";
+
         public String getToken() {
             return token;
         }
@@ -145,6 +130,14 @@ public class MonitorProperties {
 
         public void setChatId(String chatId) {
             this.chatId = chatId;
+        }
+
+        public String getStateFile() {
+            return stateFile;
+        }
+
+        public void setStateFile(String stateFile) {
+            this.stateFile = stateFile;
         }
     }
 }

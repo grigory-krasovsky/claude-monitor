@@ -51,7 +51,7 @@ public class TelegramClient {
     public void registerCommands() {
         ObjectNode body = objectMapper.createObjectNode();
         var commands = objectMapper.createArrayNode();
-        commands.add(command("status", "Текущая утилизация лимитов"));
+        commands.add(command("status", "Пересоздать статусное сообщение"));
         commands.add(command("chatid", "ID этого чата"));
         commands.add(command("help", "Справка"));
         body.set("commands", commands);
@@ -71,30 +71,65 @@ public class TelegramClient {
         return node;
     }
 
-    /** Отправляет сообщение в чат, заданный в настройках. Без chat-id молча ничего не делает. */
-    public void sendToConfiguredChat(String text) {
-        String chatId = properties.getTelegram().getChatId();
-        if (!StringUtils.hasText(chatId)) {
-            log.warn("chat-id не задан, сообщение не отправлено: {}", text.lines().findFirst().orElse(""));
-            return;
-        }
-        sendMessage(chatId, text);
-    }
-
-    /** Отправляет сообщение в произвольный чат. Ошибки логируются, наружу не пробрасываются. */
-    public void sendMessage(String chatId, String text) {
+    /**
+     * Отправляет сообщение. Ошибки логируются, наружу не пробрасываются.
+     *
+     * @return идентификатор отправленного сообщения или {@code null}, если не удалось
+     */
+    public Long sendMessage(String chatId, String text) {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("chat_id", chatId);
         body.put("text", text);
         body.put("parse_mode", "HTML");
         body.put("disable_web_page_preview", true);
-        try {
-            JsonNode response = call("sendMessage", body, Duration.ofSeconds(20));
-            if (response != null && !response.path("ok").asBoolean(false)) {
-                log.error("sendMessage отклонён: {}", response);
-            }
-        } catch (RuntimeException e) {
-            log.error("Не удалось отправить сообщение: {}", e.toString());
+
+        JsonNode response = call("sendMessage", body, Duration.ofSeconds(20));
+        if (response == null || !response.path("ok").asBoolean(false)) {
+            log.error("sendMessage отклонён: {}", response);
+            return null;
+        }
+        return response.path("result").path("message_id").asLong();
+    }
+
+    /**
+     * Переписывает текст ранее отправленного сообщения.
+     *
+     * @return {@code false}, если сообщения больше нет и его нужно создавать заново
+     */
+    public boolean editMessage(String chatId, long messageId, String text) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("chat_id", chatId);
+        body.put("message_id", messageId);
+        body.put("text", text);
+        body.put("parse_mode", "HTML");
+        body.put("disable_web_page_preview", true);
+
+        JsonNode response = call("editMessageText", body, Duration.ofSeconds(20));
+        if (response == null) {
+            // Сетевой сбой: сообщение, скорее всего, на месте, пересоздавать его не нужно
+            return true;
+        }
+        if (response.path("ok").asBoolean(false)) {
+            return true;
+        }
+        String description = response.path("description").asString("");
+        // Telegram считает ошибкой правку, не меняющую текст, — для нас это просто «нечего делать»
+        if (description.contains("message is not modified")) {
+            return true;
+        }
+        log.warn("editMessageText отклонён: {}", description);
+        return false;
+    }
+
+    /** Удаляет сообщение. Бот может удалять свои сообщения в течение 48 часов. */
+    public void deleteMessage(String chatId, long messageId) {
+        ObjectNode body = objectMapper.createObjectNode();
+        body.put("chat_id", chatId);
+        body.put("message_id", messageId);
+
+        JsonNode response = call("deleteMessage", body, Duration.ofSeconds(20));
+        if (response != null && !response.path("ok").asBoolean(false)) {
+            log.debug("deleteMessage отклонён: {}", response.path("description").asString(""));
         }
     }
 

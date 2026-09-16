@@ -67,7 +67,7 @@ class MonitorLogicTests {
     @Test
     @DisplayName("выбирает наибольший достигнутый порог")
     void picksHighestReachedThreshold() {
-        AlertService service = new AlertService(new MonitorProperties(), null, null, null, null);
+        AlertService service = new AlertService(new MonitorProperties(), null, null, null, null, null);
 
         assertThat(service.highestThresholdReached(49)).isZero();
         assertThat(service.highestThresholdReached(50)).isEqualTo(50);
