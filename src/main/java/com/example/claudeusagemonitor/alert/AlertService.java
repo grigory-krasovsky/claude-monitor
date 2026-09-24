@@ -136,7 +136,7 @@ public class AlertService {
         int reached = highestThresholdReached(window.percent());
         if (reached > state.maxNotified) {
             log.info("{}: {}% — порог {}%", kind.title(), Math.round(window.percent()), reached);
-            triggered.add(formatter.thresholdAlert(kind, window, reached));
+//            triggered.add(formatter.thresholdAlert(kind, window, reached));
             state.maxNotified = reached;
         }
     }
