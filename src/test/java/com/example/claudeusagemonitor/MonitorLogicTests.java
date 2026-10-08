@@ -65,13 +65,19 @@ class MonitorLogicTests {
     }
 
     @Test
+    @DisplayName("экранирует HTML в именах и текстах ошибок")
+    void escapesHtml() {
+        assertThat(MessageFormatter.escape("<b>Tom & Jerry</b>")).isEqualTo("&lt;b&gt;Tom &amp; Jerry&lt;/b&gt;");
+    }
+
+    @Test
     @DisplayName("выбирает наибольший достигнутый порог")
     void picksHighestReachedThreshold() {
-        AlertService service = new AlertService(new MonitorProperties(), null, null, null, null, null);
+        MonitorProperties properties = new MonitorProperties();
 
-        assertThat(service.highestThresholdReached(49)).isZero();
-        assertThat(service.highestThresholdReached(50)).isEqualTo(50);
-        assertThat(service.highestThresholdReached(91.4)).isEqualTo(90);
-        assertThat(service.highestThresholdReached(100)).isEqualTo(95);
+        assertThat(AlertService.highestThresholdReached(properties, 49)).isZero();
+        assertThat(AlertService.highestThresholdReached(properties, 50)).isEqualTo(50);
+        assertThat(AlertService.highestThresholdReached(properties, 91.4)).isEqualTo(90);
+        assertThat(AlertService.highestThresholdReached(properties, 100)).isEqualTo(95);
     }
 }

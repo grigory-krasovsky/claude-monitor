@@ -1,5 +1,6 @@
 package com.example.claudeusagemonitor.usage;
 
+import com.example.claudeusagemonitor.account.AccountSession;
 import com.example.claudeusagemonitor.config.MonitorProperties;
 import java.io.IOException;
 import java.net.URI;
@@ -47,35 +48,53 @@ public class UsageClient {
     }
 
     /**
-     * Запрашивает текущие лимиты.
+     * Запрашивает текущие лимиты аккаунта, обновляя токен при необходимости.
      *
-     * @return срез лимитов
      * @throws UsageException если запрос не удался
      */
-    public UsageSnapshot fetch() {
-        if (!tokenProvider.isConfigured()) {
-            throw new UsageException("Токен Anthropic не настроен");
+    public UsageSnapshot fetch(AccountSession session) {
+        if (!session.tokens().isConfigured()) {
+            throw new UsageException(0, "Токен Anthropic не настроен");
         }
-        HttpResponse<String> response = send(tokenProvider.accessToken());
-        if (response.statusCode() == 401 && tokenProvider.forceRefresh()) {
-            log.info("Получен 401, повторяю запрос с обновлённым токеном");
-            response = send(tokenProvider.accessToken());
+        String token = tokenProvider.accessToken(session);
+        if (!StringUtils.hasText(token)) {
+            // Access token нет, а обновить не вышло — причина важнее, чем «пустой токен»
+            String reason = session.tokens().refreshError();
+            throw new UsageException(0, reason == null ? "Пустой access token" : "Не удалось обновить токен: " + reason);
         }
+        HttpResponse<String> response = send(token);
+        if (response.statusCode() == 401 && tokenProvider.forceRefresh(session)) {
+            log.info("Получен 401 для {}, повторяю запрос с обновлённым токеном", session);
+            response = send(tokenProvider.accessToken(session));
+        }
+        return parse(response);
+    }
+
+    /**
+     * Пробный запрос с конкретным access token, без обновления. Нужен при подключении
+     * аккаунта: токен должен доказать, что открывает именно эндпоинт лимитов, прежде
+     * чем попасть в базу.
+     */
+    public UsageSnapshot fetch(String accessToken) {
+        if (!StringUtils.hasText(accessToken)) {
+            throw new UsageException(0, "Пустой access token");
+        }
+        return parse(send(accessToken));
+    }
+
+    private UsageSnapshot parse(HttpResponse<String> response) {
         if (response.statusCode() != 200) {
-            throw new UsageException("API вернул HTTP " + response.statusCode() + ": " + shorten(response.body()));
+            throw new UsageException(response.statusCode(), response.body());
         }
         try {
             JsonNode json = objectMapper.readTree(response.body());
             return new UsageSnapshot(window(json.get("five_hour")), window(json.get("seven_day")), Instant.now());
         } catch (JacksonException e) {
-            throw new UsageException("Не удалось разобрать ответ API: " + e.getMessage());
+            throw new UsageException(0, "Не удалось разобрать ответ API: " + e.getMessage());
         }
     }
 
     private HttpResponse<String> send(String token) {
-        if (!StringUtils.hasText(token)) {
-            throw new UsageException("Пустой access token");
-        }
         HttpRequest request = HttpRequest.newBuilder(URI.create(USAGE_URL))
                 .timeout(Duration.ofSeconds(30))
                 .header("Authorization", "Bearer " + token)
@@ -87,10 +106,10 @@ public class UsageClient {
         try {
             return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         } catch (IOException e) {
-            throw new UsageException("Сеть недоступна: " + e.getMessage());
+            throw new UsageException(0, "Сеть недоступна: " + e.getMessage());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new UsageException("Запрос прерван");
+            throw new UsageException(0, "Запрос прерван");
         }
     }
 
@@ -128,10 +147,29 @@ public class UsageClient {
         return body.length() > 300 ? body.substring(0, 300) + "…" : body;
     }
 
-    /** Ошибка обращения к API лимитов. */
+    /**
+     * Ошибка обращения к API лимитов. Статус и тело сохраняются отдельно: по ним /token
+     * объясняет пользователю, что не так — scope, гео-блок или мёртвый токен.
+     */
     public static class UsageException extends RuntimeException {
-        public UsageException(String message) {
-            super(message);
+        private final int status;
+        private final String body;
+
+        /**
+         * @param status HTTP-статус; 0 — ответа от API не было, тогда {@code body} — описание сбоя
+         */
+        public UsageException(int status, String body) {
+            super(status == 0 ? body : "API вернул HTTP " + status + ": " + shorten(body));
+            this.status = status;
+            this.body = body == null ? "" : body;
+        }
+
+        public int status() {
+            return status;
+        }
+
+        public String body() {
+            return body;
         }
     }
 }

@@ -1,13 +1,48 @@
 services:
+  db:
+    image: postgres:17-alpine
+    container_name: claude-usage-monitor-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: monitor
+      POSTGRES_USER: monitor
+      # Пароль читается только при первой инициализации volume: если сменить его
+      # позже, придётся менять и внутри БД (ALTER USER), иначе монитор не подключится
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # Порт наружу не публикуется: БД нужна только монитору внутри docker-сети
+    # Проверка по TCP, а не через сокет: при первой инициализации volume временный сервер
+    # слушает только сокет, и pg_isready без -h отвечал бы «ready» ещё во время initdb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U monitor -d monitor"]
+      start_period: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   monitor:
     # На VPS образ тянется из GHCR: IMAGE прописывает деплой в .env.
     # Локальная сборка живёт в docker-compose.override.yml — на сервер он не копируется.
     image: ${IMAGE:-claude-usage-monitor:local}
     container_name: claude-usage-monitor
     restart: unless-stopped
+    # Отсюда приходят и секреты приложения: TELEGRAM_BOT_TOKEN, TOKEN_ENCRYPTION_KEY
     env_file: .env
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/monitor
+      SPRING_DATASOURCE_USERNAME: monitor
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан}
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
-      # Здесь переживают рестарт обновлённые OAuth-токены
+      # Старые /data/tokens.json и board.json: из них один раз импортируется владелец
       - monitor-data:/data
     logging:
       driver: json-file
@@ -17,3 +52,4 @@ services:
 
 volumes:
   monitor-data:
+  pg-data:

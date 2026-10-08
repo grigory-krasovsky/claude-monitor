@@ -103,13 +103,21 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ secrets.VPS_PORT || 22 }}
-          envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,RENDER,THRESHOLDS,TZ_NAME,PROXY
+          envs: DEPLOY_PATH,IMAGE_REF,GHCR_USER,GHCR_TOKEN,PG_PASSWORD,TOKEN_KEY,TG_TOKEN,TG_CHAT,ANTHROPIC_TOKEN,ANTHROPIC_REFRESH,POLL,RENDER,THRESHOLDS,TZ_NAME,PROXY
           script: |
             set -e
+            # Без пароля Postgres не инициализирует volume — падаем сразу, а не после pull
+            if [ -z "$PG_PASSWORD" ]; then echo "Секрет POSTGRES_PASSWORD не задан" >&2; exit 1; fi
+            # Без ключа монитор не стартует, а сменённый ключ делает нечитаемыми все сохранённые токены
+            if [ -z "$TOKEN_KEY" ]; then echo "Секрет TOKEN_ENCRYPTION_KEY не задан (openssl rand -base64 32)" >&2; exit 1; fi
+            # Ключ неверного формата контейнер не запустит, а up -d всё равно вернёт 0 — ловим здесь
+            if [ "$(printf %s "$TOKEN_KEY" | base64 -d 2>/dev/null | wc -c)" -ne 32 ]; then echo "Секрет TOKEN_ENCRYPTION_KEY должен быть base64 от ровно 32 байт (openssl rand -base64 32)" >&2; exit 1; fi
             cd "$DEPLOY_PATH"
             # .env целиком пересобирается из секретов: источник правды — GitHub, не сервер
             cat > .env <<EOF
             IMAGE=$IMAGE_REF
+            POSTGRES_PASSWORD=$PG_PASSWORD
+            TOKEN_ENCRYPTION_KEY=$TOKEN_KEY
             TELEGRAM_BOT_TOKEN=$TG_TOKEN
             TELEGRAM_CHAT_ID=$TG_CHAT
             ANTHROPIC_ACCESS_TOKEN=$ANTHROPIC_TOKEN
@@ -129,6 +137,8 @@ jobs:
           IMAGE_REF: ${{ needs.image.outputs.image }}:${{ github.sha }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PG_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          TOKEN_KEY: ${{ secrets.TOKEN_ENCRYPTION_KEY }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
           ANTHROPIC_TOKEN: ${{ secrets.ANTHROPIC_ACCESS_TOKEN }}

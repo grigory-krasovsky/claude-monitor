@@ -1,94 +1,61 @@
 package com.example.claudeusagemonitor.telegram;
 
-import com.example.claudeusagemonitor.config.MonitorProperties;
-import jakarta.annotation.PostConstruct;
-import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
+import com.example.claudeusagemonitor.account.AccountRepository;
+import com.example.claudeusagemonitor.account.AccountSession;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.JsonNode;
-import tools.jackson.databind.ObjectMapper;
-import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Держит в чате ровно два сообщения бота: живой статус и, при необходимости, алерт.
+ * Держит в чате аккаунта ровно два сообщения бота: живой статус и, при необходимости, алерт.
  *
  * <p>Статус переписывается на месте вместо отправки нового сообщения и всегда остаётся
  * последним в чате: когда появляется алерт, статус удаляется и создаётся заново уже
  * под ним. Предыдущий алерт при этом тоже удаляется — так пороги дают уведомление,
  * но не копятся лентой.
  *
- * <p>Все методы синхронизированы: отрисовка идёт из планировщика раз в 15 секунд,
- * а команды бота приходят из потока long polling.
+ * <p>Новое статусное сообщение создаётся только тогда, когда Telegram прямо говорит,
+ * что прежнего нет. На 429 бот замолкает на {@code retry_after}, на «bot was blocked» —
+ * на час, а неудачная отправка нового статуса повторяется с растущей паузой: раньше
+ * любой отказ правки означал новое сообщение, и под rate limit в чате копились дубли.
+ *
+ * <p>Состояние лежит в {@link AccountSession.Board}, все методы работают под монитором
+ * сессии: отрисовка идёт из планировщика, а команды — из потока long polling.
  */
 @Component
 public class StatusBoard {
 
     private static final Logger log = LoggerFactory.getLogger(StatusBoard.class);
 
-    private final MonitorProperties properties;
+    /** Сколько молчать, если Telegram на 429 не сообщил retry_after. */
+    static final Duration DEFAULT_RETRY_AFTER = Duration.ofSeconds(30);
+
+    /** Пользователь заблокировал бота: проверяем раз в час, не передумал ли. */
+    static final Duration BLOCKED_PAUSE = Duration.ofHours(1);
+
+    /** Пауза после первой неудачной отправки статуса; дальше удваивается до {@link #MAX_SEND_BACKOFF}. */
+    static final Duration SEND_BACKOFF = Duration.ofSeconds(30);
+    static final Duration MAX_SEND_BACKOFF = Duration.ofMinutes(10);
+
     private final TelegramClient telegramClient;
-    private final ObjectMapper objectMapper;
+    private final AccountRepository repository;
+    private Clock clock = Clock.systemUTC();
 
-    private Long statusMessageId;
-    private Long alertMessageId;
-    private AlertKind alertKind;
-    /** Последний отрисованный текст: если он не изменился, правку в Telegram не шлём. */
-    private String renderedStatus;
-
-    public StatusBoard(MonitorProperties properties, TelegramClient telegramClient, ObjectMapper objectMapper) {
-        this.properties = properties;
+    @Autowired
+    public StatusBoard(TelegramClient telegramClient, AccountRepository repository) {
         this.telegramClient = telegramClient;
-        this.objectMapper = objectMapper;
+        this.repository = repository;
     }
 
-    @PostConstruct
-    void load() {
-        Path path = stateFile();
-        if (path == null || !Files.isReadable(path)) {
-            return;
-        }
-        try {
-            JsonNode json = objectMapper.readTree(Files.readString(path, StandardCharsets.UTF_8));
-            statusMessageId = json.path("statusMessageId").asLong(0) > 0
-                    ? json.path("statusMessageId").asLong() : null;
-            alertMessageId = json.path("alertMessageId").asLong(0) > 0
-                    ? json.path("alertMessageId").asLong() : null;
-            String kind = json.path("alertKind").asString("");
-            alertKind = StringUtils.hasText(kind) ? AlertKind.valueOf(kind) : null;
-            log.info("Состояние сообщений восстановлено: статус {}, алерт {}", statusMessageId, alertMessageId);
-        } catch (IOException | JacksonException | IllegalArgumentException e) {
-            log.warn("Не удалось прочитать {}: {}", path, e.toString());
-        }
-    }
-
-    private void save() {
-        Path path = stateFile();
-        if (path == null) {
-            return;
-        }
-        try {
-            ObjectNode json = objectMapper.createObjectNode();
-            json.put("statusMessageId", statusMessageId == null ? 0 : statusMessageId);
-            json.put("alertMessageId", alertMessageId == null ? 0 : alertMessageId);
-            json.put("alertKind", alertKind == null ? "" : alertKind.name());
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
-            }
-            Files.writeString(path, objectMapper.writeValueAsString(json), StandardCharsets.UTF_8);
-        } catch (IOException | JacksonException e) {
-            log.warn("Не удалось сохранить {}: {}", path, e.toString());
-        }
-    }
-
-    private Path stateFile() {
-        String file = properties.getTelegram().getStateFile();
-        return StringUtils.hasText(file) ? Path.of(file) : null;
+    /** Для тестов: управляемые часы, чтобы проверять паузы без ожидания. */
+    StatusBoard(TelegramClient telegramClient, AccountRepository repository, Clock clock) {
+        this(telegramClient, repository);
+        this.clock = clock;
     }
 
     /** Повод для алерта. Нужен, чтобы восстановление после сбоя не стирало алерт о пороге. */
@@ -98,24 +65,31 @@ public class StatusBoard {
     }
 
     /** Обновляет статус на месте, создавая сообщение при первом вызове. */
-    public synchronized void render(String statusText) {
-        String chatId = chatId();
-        if (chatId == null) {
-            return;
-        }
-        if (statusMessageId == null) {
-            createStatus(chatId, statusText);
-            return;
-        }
-        if (statusText.equals(renderedStatus)) {
-            return;
-        }
-        if (telegramClient.editMessage(chatId, statusMessageId, statusText)) {
-            renderedStatus = statusText;
-        } else {
-            // Сообщение пропало (удалено вручную, чат очищен) — заводим новое
-            log.info("Статусное сообщение недоступно, создаю заново");
-            createStatus(chatId, statusText);
+    public void render(AccountSession session, String statusText) {
+        synchronized (session) {
+            AccountSession.Board board = session.board();
+            if (session.isDetached() || board.isPaused(now())) {
+                return;
+            }
+            if (board.statusMessageId() == null) {
+                createStatus(session, statusText);
+                return;
+            }
+            if (statusText.equals(board.renderedStatus())) {
+                return;
+            }
+            TelegramResult result = telegramClient.editMessage(session.chatId(), board.statusMessageId(), statusText);
+            if (result.ok() || result.isNotModified()) {
+                board.setRenderedStatus(statusText);
+                board.markDelivered();
+            } else if (result.isMessageMissing()) {
+                log.info("Статусное сообщение {} пропало ({}), создаю заново", session, result.description());
+                board.setStatusMessageId(null);
+                createStatus(session, statusText);
+            } else {
+                // Сообщение, скорее всего, на месте — новое не создаём, иначе получим дубль
+                pauseOnFailure(session, "editMessageText", result, false);
+            }
         }
     }
 
@@ -123,64 +97,146 @@ public class StatusBoard {
      * Поднимает алерт: убирает предыдущий алерт и статус, публикует новый алерт
      * и сразу под ним — свежий статус.
      */
-    public synchronized void raise(AlertKind kind, String alertText, String statusText) {
-        String chatId = chatId();
-        if (chatId == null) {
-            return;
-        }
-        dropStatus(chatId);
-        dropAlert(chatId);
+    public void raise(AccountSession session, AlertKind kind, String alertText, String statusText) {
+        synchronized (session) {
+            AccountSession.Board board = session.board();
+            if (session.isDetached() || board.isPaused(now())) {
+                // Под 429 или блокировкой отправка всё равно не пройдёт, а удалив статус,
+                // мы оставили бы чат совсем без него
+                return;
+            }
+            dropStatus(session);
+            dropAlert(session);
 
-        alertMessageId = telegramClient.sendMessage(chatId, alertText);
-        alertKind = alertMessageId == null ? null : kind;
-        createStatus(chatId, statusText);
+            TelegramResult result = telegramClient.sendMessage(session.chatId(), alertText);
+            board.setAlert(result.messageId(), kind);
+            if (!result.ok()) {
+                pauseOnFailure(session, "sendMessage (алерт)", result, false);
+            }
+            createStatus(session, statusText);
+        }
     }
 
     /** Убирает алерт, если он висит и относится к указанному поводу. */
-    public synchronized void clear(AlertKind kind) {
-        String chatId = chatId();
-        if (chatId == null || alertMessageId == null || alertKind != kind) {
+    public void clear(AccountSession session, AlertKind kind) {
+        synchronized (session) {
+            AccountSession.Board board = session.board();
+            if (session.isDetached() || board.alertMessageId() == null || board.alertKind() != kind) {
+                return;
+            }
+            log.info("Убираю алерт {} ({})", session, kind);
+            dropAlert(session);
+            save(session);
+        }
+    }
+
+    /**
+     * Пересоздаёт статус, чтобы он снова оказался последним сообщением в чате.
+     * Это ответ на команду пользователя, поэтому паузы снимаются: раз он пишет боту,
+     * значит, не заблокировал его.
+     */
+    public void repost(AccountSession session, String statusText) {
+        synchronized (session) {
+            if (session.isDetached()) {
+                return;
+            }
+            session.board().markDelivered();
+            dropStatus(session);
+            createStatus(session, statusText);
+        }
+    }
+
+    /**
+     * Удаляет из чата оба сообщения бота и забывает их. Работает и на отцепленной
+     * сессии — ради этого её и отцепляют: /forget и /revoke убирают статус за собой.
+     */
+    public void dropAll(AccountSession session) {
+        synchronized (session) {
+            dropStatus(session);
+            dropAlert(session);
+            save(session);
+        }
+    }
+
+    private void createStatus(AccountSession session, String statusText) {
+        AccountSession.Board board = session.board();
+        TelegramResult result = telegramClient.sendMessage(session.chatId(), statusText);
+        board.setStatusMessageId(result.messageId());
+        if (result.ok()) {
+            board.setRenderedStatus(statusText);
+            board.markDelivered();
+        } else {
+            board.setRenderedStatus(null);
+            pauseOnFailure(session, "sendMessage (статус)", result, true);
+        }
+        save(session);
+    }
+
+    /**
+     * Ставит паузу отрисовки по причине отказа.
+     *
+     * @param sending отказ при создании нового сообщения: тогда даже на непонятную ошибку
+     *                нужна пауза, иначе попытка повторялась бы каждые 15 секунд
+     */
+    private void pauseOnFailure(AccountSession session, String method, TelegramResult result, boolean sending) {
+        AccountSession.Board board = session.board();
+        Duration pause;
+        if (result.isRateLimited()) {
+            pause = result.retryAfter() == null ? DEFAULT_RETRY_AFTER : result.retryAfter();
+            log.warn("Telegram просит подождать {} с ({} для {})", pause.toSeconds(), method, session);
+        } else if (result.isChatUnavailable()) {
+            pause = BLOCKED_PAUSE;
+            log.warn("Чат {} недоступен ({}): {}, молчу до {}", session.chatId(), method, result.description(),
+                    now().plus(pause));
+        } else if (sending) {
+            int failures = board.incrementSendFailures();
+            long factor = 1L << Math.min(failures - 1, 10);
+            pause = SEND_BACKOFF.multipliedBy(factor);
+            if (pause.compareTo(MAX_SEND_BACKOFF) > 0) {
+                pause = MAX_SEND_BACKOFF;
+            }
+            log.warn("{} для {} не удался ({}), повтор через {} с", method, session, result.description(),
+                    pause.toSeconds());
+        } else {
+            log.warn("{} для {} отклонён: {}", method, session, result.description());
             return;
         }
-        log.info("Убираю алерт ({})", kind);
-        dropAlert(chatId);
-        save();
+        board.pauseUntil(now().plus(pause));
     }
 
-    /** Пересоздаёт статус, чтобы он снова оказался последним сообщением в чате. */
-    public synchronized void repost(String statusText) {
-        String chatId = chatId();
-        if (chatId == null) {
+    private void dropStatus(AccountSession session) {
+        AccountSession.Board board = session.board();
+        if (board.statusMessageId() != null) {
+            telegramClient.deleteMessage(session.chatId(), board.statusMessageId());
+            board.setStatusMessageId(null);
+            board.setRenderedStatus(null);
+        }
+    }
+
+    private void dropAlert(AccountSession session) {
+        AccountSession.Board board = session.board();
+        if (board.alertMessageId() != null) {
+            telegramClient.deleteMessage(session.chatId(), board.alertMessageId());
+            board.setAlert(null, null);
+        }
+    }
+
+    /** Id сообщений в базе: по ним бот после рестарта продолжает править то же сообщение. */
+    private void save(AccountSession session) {
+        if (session.isDetached()) {
+            // Отцепленная сессия больше не владеет строкой: её судьбу решает команда
             return;
         }
-        dropStatus(chatId);
-        createStatus(chatId, statusText);
-    }
-
-    private void createStatus(String chatId, String statusText) {
-        statusMessageId = telegramClient.sendMessage(chatId, statusText);
-        renderedStatus = statusMessageId == null ? null : statusText;
-        save();
-    }
-
-    private void dropStatus(String chatId) {
-        if (statusMessageId != null) {
-            telegramClient.deleteMessage(chatId, statusMessageId);
-            statusMessageId = null;
-            renderedStatus = null;
+        AccountSession.Board board = session.board();
+        try {
+            repository.saveBoard(session.accountId(), board.statusMessageId(), board.alertMessageId(),
+                    board.alertKind());
+        } catch (DataAccessException e) {
+            log.error("Не удалось сохранить id сообщений {}: {}", session, e.toString());
         }
     }
 
-    private void dropAlert(String chatId) {
-        if (alertMessageId != null) {
-            telegramClient.deleteMessage(chatId, alertMessageId);
-            alertMessageId = null;
-            alertKind = null;
-        }
-    }
-
-    private String chatId() {
-        String chatId = properties.getTelegram().getChatId();
-        return StringUtils.hasText(chatId) ? chatId : null;
+    private Instant now() {
+        return clock.instant();
     }
 }

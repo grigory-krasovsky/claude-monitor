@@ -1,5 +1,6 @@
 package com.example.claudeusagemonitor.telegram;
 
+import com.example.claudeusagemonitor.account.RegistrationService;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
@@ -25,13 +26,16 @@ public class BotPoller implements SmartLifecycle {
 
     private final TelegramClient telegramClient;
     private final CommandService commandService;
+    private final RegistrationService registration;
 
     private volatile boolean running;
     private Thread thread;
 
-    public BotPoller(TelegramClient telegramClient, CommandService commandService) {
+    public BotPoller(TelegramClient telegramClient, CommandService commandService,
+                     RegistrationService registration) {
         this.telegramClient = telegramClient;
         this.commandService = commandService;
+        this.registration = registration;
     }
 
     @Override
@@ -41,6 +45,11 @@ public class BotPoller implements SmartLifecycle {
             return;
         }
         telegramClient.registerCommands();
+        try {
+            registration.registerAdminCommands();
+        } catch (RuntimeException e) {
+            log.warn("Не удалось зарегистрировать команды администратора: {}", e.toString());
+        }
         running = true;
         thread = new Thread(this::pollLoop, "telegram-poller");
         thread.setDaemon(false);

@@ -20,6 +20,13 @@ public class MonitorProperties {
     /** Часовой пояс для отображения времени сброса окна. */
     private ZoneId timezone = ZoneId.of("Europe/Moscow");
 
+    /**
+     * Ключ AES-256 для токенов в базе: base64 от ровно 32 байт (см. {@code TokenCipher}).
+     * Значения по умолчанию нет намеренно — без ключа приложение не стартует. Не выводится
+     * ни в логи, ни в сообщения об ошибках.
+     */
+    private String tokenEncryptionKey = "";
+
     public Anthropic getAnthropic() {
         return anthropic;
     }
@@ -52,16 +59,38 @@ public class MonitorProperties {
         this.timezone = timezone;
     }
 
-    /** Доступ к недокументированному эндпоинту Anthropic /api/oauth/usage. */
+    public String getTokenEncryptionKey() {
+        return tokenEncryptionKey;
+    }
+
+    public void setTokenEncryptionKey(String tokenEncryptionKey) {
+        this.tokenEncryptionKey = tokenEncryptionKey;
+    }
+
+    /**
+     * Доступ к недокументированному эндпоинту Anthropic /api/oauth/usage.
+     *
+     * <p>Токены аккаунтов теперь живут в базе и приходят через /token. Поля ниже — прежняя
+     * однопользовательская конфигурация: из неё один раз импортируется владелец.
+     */
     public static class Anthropic {
 
-        /** OAuth access token (sk-ant-oat01-...). Проще всего получить через `claude setup-token`. */
+        /**
+         * OAuth access token (sk-ant-oat01-...) владельца — только для импорта. Токен из
+         * {@code claude setup-token} сюда не годится: у него лишь scope user:inference,
+         * и эндпоинт лимитов отвечает ему 403 «does not meet scope requirement user:profile».
+         */
         private String accessToken = "";
 
-        /** Необязательный refresh token (sk-ant-ort01-...) для самостоятельного обновления access token. */
+        /**
+         * Refresh token (sk-ant-ort01-...) владельца — только для импорта. Брать из отдельного
+         * логина ({@code CLAUDE_CONFIG_DIR=~/.claude-monitor claude login}, файл
+         * {@code .credentials.json} в этом каталоге): бот ротирует токен при каждом обмене,
+         * и копия из основного ~/.claude разлогинила бы локальный Claude Code.
+         */
         private String refreshToken = "";
 
-        /** Файл, куда сохраняются обновлённые токены (должен лежать на volume). */
+        /** Прежний файл с ротированными токенами на volume — свежее окружения, читается при импорте. */
         private String tokenFile = "/data/tokens.json";
 
         /** User-Agent обязателен, иначе эндпоинт быстро упирается в rate limit. */
@@ -106,13 +135,16 @@ public class MonitorProperties {
         /** Токен бота от @BotFather. */
         private String token = "";
 
-        /** Чат, куда шлются алерты. Если пусто — алерты не отправляются, но команды работают. */
+        /**
+         * Чат владельца из однопользовательской версии. Нужен только для однократного
+         * импорта в базу (см. {@code OwnerImporter}); без него приложение тоже стартует.
+         */
         private String chatId = "";
 
         /**
-         * Файл с идентификаторами статусного сообщения и алерта. Должен лежать на volume:
-         * без него каждый рестарт терял бы ссылку на своё сообщение и оставлял его
-         * в чате мёртвым, создавая рядом новое.
+         * Прежний файл с идентификаторами статусного сообщения и алерта. Читается при
+         * импорте владельца, чтобы бот продолжил править то же сообщение, а не бросил
+         * его в чате мёртвым, создав рядом новое. Дальше id сообщений хранятся в базе.
          */
         private String stateFile = "/data/board.json";
 

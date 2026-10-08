@@ -31,6 +31,30 @@ public class MessageFormatter {
     /** Разрыв в процентных пунктах, начиная с которого темп считается отклонившимся. */
     private static final double PACE_TOLERANCE = 10;
 
+    /**
+     * Как получить токен для /token. Логин отдельный (свой CLAUDE_CONFIG_DIR) потому, что
+     * бот ротирует refresh token при каждом обмене: копия токена основного CLI разлогинила
+     * бы его. А {@code claude setup-token} не подходит вовсе — его токену эндпоинт лимитов
+     * отвечает 403 «OAuth token does not meet scope requirement user:profile».
+     */
+    public static final String TOKEN_HOWTO = """
+            <b>Как подключить аккаунт Claude</b>
+            1. На своём компьютере сделайте отдельный логин — так бот не разлогинит ваш основной Claude Code:
+            <code>CLAUDE_CONFIG_DIR=~/.claude-monitor claude login</code>
+            2. Возьмите <code>claudeAiOauth.refreshToken</code> (sk-ant-ort01-…) из файла <code>~/.claude-monitor/.credentials.json</code>.
+            3. Пришлите сюда: <code>/token sk-ant-ort01-…</code>
+            Сообщение с токеном бот сразу удалит. Токен из <code>claude setup-token</code> не подойдёт: у него нет доступа к данным о лимитах.""";
+
+    /**
+     * Токены аккаунта в базе есть, но не расшифровываются: сменился ключ шифрования или
+     * запись повреждена. Мониторинг такого аккаунта не запускается, пока не придёт новый /token.
+     */
+    public static final String TOKENS_UNREADABLE = """
+            ⚠️ <b>Сохранённые токены не читаются</b> — на сервере сменился ключ шифрования или запись \
+            в базе повреждена. Мониторинг остановлен; пришлите /token заново.
+
+            """ + TOKEN_HOWTO;
+
     private final MonitorProperties properties;
 
     public MessageFormatter(MonitorProperties properties) {
@@ -47,6 +71,17 @@ public class MessageFormatter {
         // возраст данных показываем явно, чтобы разница не выглядела расхождением.
         sb.append("\n\n<i>данные ").append(age(snapshot.capturedAt())).append("</i>");
         return sb.toString();
+    }
+
+    /**
+     * Экранирует текст для parse_mode=HTML. Имена пользователей и ответы API приходят
+     * извне: один символ {@code <} в имени — и Telegram отклонит всё сообщение.
+     */
+    public static String escape(String text) {
+        if (text == null) {
+            return "";
+        }
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static String age(Instant capturedAt) {
