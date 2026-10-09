@@ -27,7 +27,13 @@ if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
 # Возвращает код выхода: 0 — токен выдан, 1 — нет
 function Get-Token([string] $dir) {
     Write-Host ''
-    Write-Host 'Сейчас откроется браузер — войдите в свой аккаунт Claude (подписка Pro/Max).'
+    Write-Host 'Браузер сам не откроется: ссылка для входа сейчас окажется в буфере обмена'
+    Write-Host '(и будет напечатана ниже после «If the browser didn''t open, visit:»).'
+    Write-Host '1. Вставьте её (Ctrl+V) в адресную строку браузера и войдите в аккаунт Claude'
+    Write-Host '   (подписка Pro/Max). Надпись «Opening browser…» ниже не обращайте внимания.'
+    Write-Host '2. Если браузер на этом же компьютере, логин завершится сам. Если покажет код —'
+    Write-Host '   вставьте его сюда после «Paste code here if prompted» и нажмите Enter.'
+    Write-Host '   Ctrl+C в этом окне не нажимайте — он прервёт логин.'
     Write-Host 'Ваш обычный Claude Code это не затронет.'
     Write-Host ''
     # Out-Host: вывод CLI идёт на экран, а не в возвращаемое значение функции
@@ -89,6 +95,17 @@ if (Test-Path -LiteralPath $settings) {
 
 $dir = Join-Path $env:TEMP ('claude-monitor-login-' + [guid]::NewGuid().ToString('N'))
 $env:CLAUDE_CONFIG_DIR = $dir
+# Claude Code открывает ссылку командой из BROWSER. Подставляем свою: браузер не
+# запускается, а ссылка уходит в буфер обмена — её открывают вручную, в нужном браузере.
+# set "URL=..." в кавычках: в ссылке есть &, которые cmd иначе принял бы за разделитель команд
+$noBrowser = Join-Path $env:TEMP ('claude-monitor-nobrowser-' + [guid]::NewGuid().ToString('N') + '.cmd')
+Set-Content -LiteralPath $noBrowser -Encoding ASCII -Value @(
+    '@echo off',
+    'set "URL=%~1"',
+    'powershell -NoProfile -Command "Set-Clipboard -Value $env:URL"',
+    'exit /b 0'
+)
+$env:BROWSER = $noBrowser
 $code = 1
 try {
     $code = Get-Token $dir
@@ -97,6 +114,8 @@ finally {
     # Каталог удаляем при любом исходе, в том числе при отменённом логине
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $noBrowser -Force -ErrorAction SilentlyContinue
+    Remove-Item Env:BROWSER -ErrorAction SilentlyContinue
 }
 Write-Host 'Временные файлы удалены.'
 Finish $code

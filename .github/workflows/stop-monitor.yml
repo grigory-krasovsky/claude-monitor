@@ -1,0 +1,40 @@
+name: Остановка монитора
+
+# Останавливает контейнеры на VPS. Отдельный workflow, а не шаг деплоя: остановка
+# не должна зависеть от сборки и тестов — упавший тест иначе оставил бы монитор
+# работать. Повторить можно вручную: Actions → «Остановка монитора» → Run workflow.
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  stop:
+    name: Остановка контейнеров на VPS
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_PATH: ${{ secrets.VPS_PATH || 'claude-usage-monitor' }}
+    steps:
+      - name: docker compose down
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          envs: DEPLOY_PATH
+          script: |
+            # down без -v: контейнеры удаляются, volumes с токенами и БД остаются
+            if [ -f "$DEPLOY_PATH/docker-compose.yml" ]; then
+              cd "$DEPLOY_PATH" && docker compose down || true
+            fi
+            # Страховка, если compose не смог разобрать файлы: останавливаем по имени
+            docker stop claude-usage-monitor 2>/dev/null || true
+            docker stop claude-usage-monitor-db 2>/dev/null || true
+            echo "Запущенные контейнеры монитора:"
+            docker ps --filter "name=claude-usage-monitor" --format '{{.Names}} {{.Status}}'
+            if [ -n "$(docker ps -q --filter name=claude-usage-monitor)" ]; then
+              echo "Контейнер всё ещё работает" >&2
+              exit 1
+            fi
+            echo "Монитор остановлен"

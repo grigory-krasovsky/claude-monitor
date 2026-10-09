@@ -63,7 +63,10 @@ jobs:
   deploy:
     name: Деплой на VPS
     needs: image
-    if: github.event_name != 'pull_request'
+    # Деплой временно выключен: монитор остановлен (см. stop-monitor.yml).
+    # Чтобы вернуть, уберите «false &&» и удалите stop-monitor.yml — иначе они
+    # сработают на одном пуше наперегонки.
+    if: false && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
