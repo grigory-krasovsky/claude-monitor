@@ -2,6 +2,7 @@ package com.example.claudeusagemonitor.account;
 
 import com.example.claudeusagemonitor.alert.AlertService;
 import com.example.claudeusagemonitor.telegram.MessageFormatter;
+import com.example.claudeusagemonitor.telegram.MessageJanitor;
 import com.example.claudeusagemonitor.telegram.TelegramClient;
 import com.example.claudeusagemonitor.telegram.TelegramResult;
 import com.example.claudeusagemonitor.usage.TokenProvider;
@@ -35,15 +36,18 @@ public class AccountService {
     private final UsageClient usageClient;
     private final AlertService alertService;
     private final TelegramClient telegramClient;
+    private final MessageJanitor janitor;
 
     public AccountService(AccountRepository repository, AccountSessions sessions, TokenProvider tokenProvider,
-                          UsageClient usageClient, AlertService alertService, TelegramClient telegramClient) {
+                          UsageClient usageClient, AlertService alertService, TelegramClient telegramClient,
+                          MessageJanitor janitor) {
         this.repository = repository;
         this.sessions = sessions;
         this.tokenProvider = tokenProvider;
         this.usageClient = usageClient;
         this.alertService = alertService;
         this.telegramClient = telegramClient;
+        this.janitor = janitor;
     }
 
     /**
@@ -55,19 +59,19 @@ public class AccountService {
         long chatId = account.chatId();
         String token = refreshToken == null ? "" : refreshToken.trim();
         if (!StringUtils.hasText(token)) {
-            telegramClient.sendMessage(chatId, MessageFormatter.TOKEN_HOWTO);
+            janitor.reply(chatId, MessageFormatter.TOKEN_HOWTO);
             return;
         }
         if (token.startsWith("sk-ant-oat")) {
             // Access token (в том числе из setup-token) живёт часы, обновить его нечем
-            telegramClient.sendMessage(chatId, """
+            janitor.reply(chatId, """
                     ❌ Это access token (sk-ant-oat…), а нужен refresh token (sk-ant-ort01-…).
 
                     """ + MessageFormatter.TOKEN_HOWTO);
             return;
         }
 
-        Long progressId = telegramClient.sendMessage(chatId, "⏳ Проверяю токен…").messageId();
+        Long progressId = janitor.reply(chatId, "⏳ Проверяю токен…").messageId();
         Optional<Connected> connected = Optional.empty();
         String reply;
         TokenGrant grant = null;
@@ -148,7 +152,7 @@ public class AccountService {
                 return;
             }
         }
-        telegramClient.sendMessage(chatId, text);
+        janitor.reply(chatId, text);
     }
 
     /**

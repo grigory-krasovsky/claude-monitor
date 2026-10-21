@@ -29,7 +29,7 @@ class TokenProviderTests {
         };
         AccountSession session = new AccountSession(1, 42,
                 new AccountSession.Tokens("access-0", "refresh-0", Instant.now().minusSeconds(1)),
-                new AccountSession.Board(null, null, null));
+                new AccountSession.Board(null, null, null, null));
 
         repository.failNext = true;
         assertThat(provider.accessToken(session)).isEqualTo("access-1");

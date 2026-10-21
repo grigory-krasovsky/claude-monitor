@@ -58,7 +58,8 @@ public class AccountSession {
     public static AccountSession of(Account account) {
         return new AccountSession(account.id(), account.chatId(),
                 new Tokens(account.accessToken(), account.refreshToken(), account.expiresAt()),
-                new Board(account.statusMessageId(), account.alertMessageId(), account.alertKind()));
+                new Board(account.statusMessageId(), account.statusPostedAt(), account.alertMessageId(),
+                        account.alertKind()));
     }
 
     public long accountId() {
@@ -204,6 +205,8 @@ public class AccountSession {
      */
     public static final class Board {
         private Long statusMessageId;
+        /** Когда статус опубликован; {@code null} при известном id — возраст неизвестен. */
+        private Instant statusPostedAt;
         private Long alertMessageId;
         private StatusBoard.AlertKind alertKind;
         /** Последний отрисованный текст: если он не изменился, правку в Telegram не шлём. */
@@ -211,8 +214,10 @@ public class AccountSession {
         private Instant pausedUntil;
         private int sendFailures;
 
-        public Board(Long statusMessageId, Long alertMessageId, StatusBoard.AlertKind alertKind) {
+        public Board(Long statusMessageId, Instant statusPostedAt, Long alertMessageId,
+                     StatusBoard.AlertKind alertKind) {
             this.statusMessageId = statusMessageId;
+            this.statusPostedAt = statusMessageId == null ? null : statusPostedAt;
             this.alertMessageId = alertMessageId;
             this.alertKind = alertMessageId == null ? null : alertKind;
         }
@@ -223,6 +228,17 @@ public class AccountSession {
 
         public void setStatusMessageId(Long statusMessageId) {
             this.statusMessageId = statusMessageId;
+            if (statusMessageId == null) {
+                this.statusPostedAt = null;
+            }
+        }
+
+        public Instant statusPostedAt() {
+            return statusPostedAt;
+        }
+
+        public void setStatusPostedAt(Instant statusPostedAt) {
+            this.statusPostedAt = statusPostedAt;
         }
 
         public Long alertMessageId() {

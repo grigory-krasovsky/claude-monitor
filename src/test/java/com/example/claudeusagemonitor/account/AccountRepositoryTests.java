@@ -45,6 +45,21 @@ class AccountRepositoryTests extends DatabaseTest {
     }
 
     @Test
+    @DisplayName("время публикации статуса сохраняется и стирается вместе с сообщением")
+    void statusPostedAtRoundTrip() {
+        repository.importApproved(10, "acc", "ref", null, 5L, null, null);
+        Account account = repository.findByChatId(10).orElseThrow();
+        assertThat(account.statusPostedAt()).isNull();
+
+        Instant posted = Instant.now().truncatedTo(ChronoUnit.MICROS);
+        repository.saveBoard(account.id(), 7L, posted, null, null);
+        assertThat(repository.findByChatId(10).orElseThrow().statusPostedAt()).isEqualTo(posted);
+
+        repository.forget(account.id());
+        assertThat(repository.findByChatId(10).orElseThrow().statusPostedAt()).isNull();
+    }
+
+    @Test
     @DisplayName("индекс допускает только одного администратора")
     void singleAdminIndex() {
         repository.promoteToAdmin(1, "first", "First");

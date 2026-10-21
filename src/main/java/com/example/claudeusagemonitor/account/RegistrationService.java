@@ -2,6 +2,7 @@ package com.example.claudeusagemonitor.account;
 
 import com.example.claudeusagemonitor.alert.AlertService;
 import com.example.claudeusagemonitor.telegram.MessageFormatter;
+import com.example.claudeusagemonitor.telegram.MessageJanitor;
 import com.example.claudeusagemonitor.telegram.TelegramClient;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,13 +40,15 @@ public class RegistrationService {
     private final AccountSessions sessions;
     private final AlertService alertService;
     private final TelegramClient telegramClient;
+    private final MessageJanitor janitor;
 
     public RegistrationService(AccountRepository repository, AccountSessions sessions, AlertService alertService,
-                               TelegramClient telegramClient) {
+                               TelegramClient telegramClient, MessageJanitor janitor) {
         this.repository = repository;
         this.sessions = sessions;
         this.alertService = alertService;
         this.telegramClient = telegramClient;
+        this.janitor = janitor;
     }
 
     /** Отправитель команды: в личке его id совпадает с chat_id. */
@@ -71,7 +74,7 @@ public class RegistrationService {
                 String tokenHint = admin.hasToken()
                         ? "Аккаунт Claude уже подключён, мониторинг продолжается."
                         : MessageFormatter.TOKEN_HOWTO;
-                telegramClient.sendMessage(chatId, """
+                janitor.reply(chatId, """
                         👑 <b>Вы администратор бота.</b>
                         Заявки других пользователей будут приходить сюда с кнопками «Одобрить» и «Отклонить»; \
                         /users — список аккаунтов, /revoke — отозвать доступ.
@@ -91,20 +94,20 @@ public class RegistrationService {
             // бы без кнопок, и одобрить её было бы нечем
             if (account.status() == AccountStatus.PENDING && account.requestMessageId() == null
                     && notifyAdmin(account)) {
-                telegramClient.sendMessage(chatId, REQUEST_SENT);
+                janitor.reply(chatId, REQUEST_SENT);
                 return;
             }
-            telegramClient.sendMessage(chatId, statusReply(account));
+            janitor.reply(chatId, statusReply(account));
             return;
         }
         if (!repository.createPending(chatId, applicant.username(), applicant.displayName())) {
             // Два /register подряд: запись уже создал параллельный запрос
-            repository.findByChatId(chatId).ifPresent(a -> telegramClient.sendMessage(chatId, statusReply(a)));
+            repository.findByChatId(chatId).ifPresent(a -> janitor.reply(chatId, statusReply(a)));
             return;
         }
         Account pending = repository.findByChatId(chatId).orElseThrow();
         notifyAdmin(pending);
-        telegramClient.sendMessage(chatId, REQUEST_SENT);
+        janitor.reply(chatId, REQUEST_SENT);
     }
 
     private static String statusReply(Account account) {
@@ -183,7 +186,7 @@ public class RegistrationService {
         telegramClient.answerCallbackQuery(callbackId,
                 decision == AccountStatus.APPROVED ? "Одобрено" : "Отклонено");
         editRequest(admin.get(), account, messageChatId, messageId);
-        telegramClient.sendMessage(target, decision == AccountStatus.APPROVED
+        janitor.notice(target, decision == AccountStatus.APPROVED
                 ? "🎉 Заявка одобрена!\n\n" + MessageFormatter.TOKEN_HOWTO
                 : "❌ Заявка отклонена администратором.");
     }
@@ -200,6 +203,10 @@ public class RegistrationService {
             case PENDING -> "⏳ на рассмотрении";
         };
         telegramClient.editMessage(chat, id, requestText(account) + "\n\n" + verdict);
+        if (account.status() != AccountStatus.PENDING) {
+            // Решение принято — заявка в чате админа больше не нужна, вердикт лишь успеть прочитать
+            janitor.expire(chat, id, MessageJanitor.REPLY_TTL);
+        }
     }
 
     /** /users: кто есть в боте. Токены не показываются — только факт их наличия. */
@@ -246,7 +253,7 @@ public class RegistrationService {
             repository.revoke(target);
         });
         log.info("Доступ {} отозван", account.get());
-        telegramClient.sendMessage(target, "⛔ Доступ к боту отозван администратором.");
+        janitor.notice(target, "⛔ Доступ к боту отозван администратором.");
         return "Доступ " + MessageFormatter.escape(account.get().label()) + " отозван.";
     }
 }

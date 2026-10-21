@@ -113,6 +113,20 @@ public class TelegramClient {
         if (buttons != null && !buttons.isEmpty()) {
             body.set("reply_markup", keyboard(buttons));
         }
+        return post(chatId, body);
+    }
+
+    /**
+     * Отправляет сообщение без звука. Так публикуется статус: его пересоздают по расписанию
+     * и по /status, и будить пользователя каждый раз незачем — звук нужен алертам.
+     */
+    public TelegramResult sendSilently(long chatId, String text) {
+        ObjectNode body = textBody(chatId, text);
+        body.put("disable_notification", true);
+        return post(chatId, body);
+    }
+
+    private TelegramResult post(long chatId, ObjectNode body) {
         TelegramResult result = call("sendMessage", body, TIMEOUT);
         if (!result.ok()) {
             log.warn("sendMessage в {} отклонён: {} {}", chatId, result.errorCode(), result.description());
@@ -135,7 +149,10 @@ public class TelegramClient {
         return result;
     }
 
-    /** Удаляет сообщение. Бот может удалять свои сообщения в течение 48 часов. */
+    /**
+     * Удаляет сообщение. Бот может удалять свои сообщения и сообщения пользователя в личке,
+     * но только в течение 48 часов — более старые Telegram удалить не даёт.
+     */
     public TelegramResult deleteMessage(long chatId, long messageId) {
         ObjectNode body = objectMapper.createObjectNode();
         body.put("chat_id", chatId);

@@ -26,6 +26,7 @@ public record Account(
         String refreshToken,
         Instant expiresAt,
         Long statusMessageId,
+        Instant statusPostedAt,
         Long alertMessageId,
         StatusBoard.AlertKind alertKind,
         Long requestMessageId,

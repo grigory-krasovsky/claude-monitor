@@ -6,6 +6,7 @@ import com.example.claudeusagemonitor.account.AccountSession;
 import com.example.claudeusagemonitor.account.AccountSessions;
 import com.example.claudeusagemonitor.config.MonitorProperties;
 import com.example.claudeusagemonitor.telegram.MessageFormatter;
+import com.example.claudeusagemonitor.telegram.MessageJanitor;
 import com.example.claudeusagemonitor.telegram.StatusBoard;
 import com.example.claudeusagemonitor.telegram.TelegramClient;
 import com.example.claudeusagemonitor.usage.LimitWindow;
@@ -53,10 +54,11 @@ public class AlertService {
     private final MessageFormatter formatter;
     private final AccountSessions sessions;
     private final AccountRepository repository;
+    private final MessageJanitor janitor;
 
     public AlertService(MonitorProperties properties, UsageClient usageClient, TelegramClient telegramClient,
                         StatusBoard board, MessageFormatter formatter, AccountSessions sessions,
-                        AccountRepository repository) {
+                        AccountRepository repository, MessageJanitor janitor) {
         this.properties = properties;
         this.usageClient = usageClient;
         this.telegramClient = telegramClient;
@@ -64,6 +66,7 @@ public class AlertService {
         this.formatter = formatter;
         this.sessions = sessions;
         this.repository = repository;
+        this.janitor = janitor;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -99,7 +102,7 @@ public class AlertService {
                             .filter(a -> a.tokensUnreadable() && a.isApproved());
                     current.ifPresent(a -> {
                         stop(a);
-                        telegramClient.sendMessage(a.chatId(), MessageFormatter.TOKENS_UNREADABLE);
+                        janitor.notice(a.chatId(), MessageFormatter.TOKENS_UNREADABLE);
                     });
                 });
             } catch (RuntimeException e) {

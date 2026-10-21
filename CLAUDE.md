@@ -81,9 +81,14 @@ from `claude setup-token` do not work: they only carry scope `user:inference`, a
   rotation persisted to the DB, per-account backoff)
 - `telegram/` — `TelegramClient` (raw Bot API, returns `TelegramResult`),
   `BotPoller` (long polling, `message` + `callback_query`), `CommandService`
-  (parsing and access control), `StatusBoard` (status/alert messages; recreates the
-  status only on "message to edit not found", honours 429 `retry_after`, pauses on
-  "bot was blocked"), `MessageFormatter`
+  (parsing and access control; deletes the user's command message and sends its
+  replies through `MessageJanitor`), `StatusBoard` (status/alert messages; recreates
+  the status only on "message to edit not found", honours 429 `retry_after`, pauses on
+  "bot was blocked"; republishes the status silently every 24 h because Telegram
+  refuses to delete bot messages older than 48 h), `MessageJanitor` (replies and
+  notices that expire on their own, persisted in `temporary_message` so they survive
+  a redeploy; use `reply`/`notice` instead of `TelegramClient.sendMessage` for
+  anything that is not the status or an alert), `MessageFormatter`
 - `alert/AlertService` — scheduled poll over all monitored accounts (APPROVED +
   readable token), render every 15 s, threshold state reset when `resets_at`
   changes. Scheduler pool size is 2 so a slow poll does not stall rendering

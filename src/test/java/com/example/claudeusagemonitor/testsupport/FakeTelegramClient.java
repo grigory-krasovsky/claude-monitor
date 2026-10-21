@@ -40,6 +40,9 @@ public class FakeTelegramClient extends TelegramClient {
     public final List<Answer> answers = new ArrayList<>();
     public final List<Long> adminCommandChats = new ArrayList<>();
 
+    /** message_id сообщений, отправленных без звука (статусы); {@code null} — отправка не удалась. */
+    public final List<Long> silent = new ArrayList<>();
+
     /** Ответы на следующие вызовы; когда очередь пуста — успех. */
     public final Deque<TelegramResult> sendResults = new ArrayDeque<>();
     public final Deque<TelegramResult> editResults = new ArrayDeque<>();
@@ -57,6 +60,7 @@ public class FakeTelegramClient extends TelegramClient {
         deletes.clear();
         answers.clear();
         adminCommandChats.clear();
+        silent.clear();
         sendResults.clear();
         editResults.clear();
         deleteResults.clear();
@@ -80,6 +84,14 @@ public class FakeTelegramClient extends TelegramClient {
     public synchronized TelegramResult sendMessage(long chatId, String text, Map<String, String> buttons) {
         TelegramResult result = sendResults.isEmpty() ? ok(nextMessageId.incrementAndGet()) : sendResults.poll();
         sent.add(new Sent(chatId, text, buttons, result.messageId()));
+        return result;
+    }
+
+    /** Беззвучная отправка в тесте — такая же отправка; что она беззвучная, видно по {@link #silent}. */
+    @Override
+    public synchronized TelegramResult sendSilently(long chatId, String text) {
+        TelegramResult result = sendMessage(chatId, text, null);
+        silent.add(result.messageId());
         return result;
     }
 

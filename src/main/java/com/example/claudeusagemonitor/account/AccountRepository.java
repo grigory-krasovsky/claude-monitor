@@ -41,7 +41,8 @@ public class AccountRepository {
 
     private static final String COLUMNS = """
             id, chat_id, username, display_name, role, status, access_token, refresh_token, expires_at,
-            status_message_id, alert_message_id, alert_kind, request_message_id, created_at, updated_at""";
+            status_message_id, status_posted_at, alert_message_id, alert_kind, request_message_id,
+            created_at, updated_at""";
 
     private final JdbcClient jdbc;
     private final TokenCipher cipher;
@@ -193,7 +194,8 @@ public class AccountRepository {
                         update account
                            set status = 'REJECTED',
                                access_token = null, refresh_token = null, expires_at = null,
-                               status_message_id = null, alert_message_id = null, alert_kind = null,
+                               status_message_id = null, status_posted_at = null,
+                               alert_message_id = null, alert_kind = null,
                                request_message_id = null, updated_at = now()
                          where chat_id = :chatId""")
                 .param("chatId", chatId)
@@ -223,14 +225,17 @@ public class AccountRepository {
     }
 
     /** Идентификаторы сообщений: по ним бот после рестарта продолжает править то же сообщение. */
-    public void saveBoard(long id, Long statusMessageId, Long alertMessageId, StatusBoard.AlertKind alertKind) {
+    public void saveBoard(long id, Long statusMessageId, Instant statusPostedAt, Long alertMessageId,
+                          StatusBoard.AlertKind alertKind) {
         jdbc.sql("""
                         update account
-                           set status_message_id = :statusId, alert_message_id = :alertId, alert_kind = :kind,
+                           set status_message_id = :statusId, status_posted_at = :postedAt,
+                               alert_message_id = :alertId, alert_kind = :kind,
                                updated_at = now()
                          where id = :id""")
                 .param("id", id)
                 .param("statusId", bigint(statusMessageId))
+                .param("postedAt", timestamp(statusPostedAt))
                 .param("alertId", bigint(alertMessageId))
                 .param("kind", text(alertKind == null ? null : alertKind.name()))
                 .update();
@@ -241,7 +246,8 @@ public class AccountRepository {
         jdbc.sql("""
                         update account
                            set access_token = null, refresh_token = null, expires_at = null,
-                               status_message_id = null, alert_message_id = null, alert_kind = null,
+                               status_message_id = null, status_posted_at = null,
+                               alert_message_id = null, alert_kind = null,
                                updated_at = now()
                          where id = :id""")
                 .param("id", id)
@@ -318,6 +324,7 @@ public class AccountRepository {
                 refreshToken,
                 instant(rs, "expires_at"),
                 rs.getObject("status_message_id", Long.class),
+                instant(rs, "status_posted_at"),
                 rs.getObject("alert_message_id", Long.class),
                 alertKind(rs.getString("alert_kind")),
                 rs.getObject("request_message_id", Long.class),

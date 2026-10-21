@@ -24,6 +24,11 @@ import org.springframework.stereotype.Component;
  * на час, а неудачная отправка нового статуса повторяется с растущей паузой: раньше
  * любой отказ правки означал новое сообщение, и под rate limit в чате копились дубли.
  *
+ * <p>Telegram не даёт удалить сообщение старше 48 часов, а статус живёт неделями. Поэтому
+ * раз в {@link #STATUS_MAX_AGE} он публикуется заново (молча), а прежний удаляется, пока это
+ * возможно: иначе при /status или алерте старая копия оставалась бы в чате замороженной.
+ * Удаление, которое не прошло из-за 429 или сети, добивает {@link MessageJanitor}.
+ *
  * <p>Состояние лежит в {@link AccountSession.Board}, все методы работают под монитором
  * сессии: отрисовка идёт из планировщика, а команды — из потока long polling.
  */
@@ -42,19 +47,24 @@ public class StatusBoard {
     static final Duration SEND_BACKOFF = Duration.ofSeconds(30);
     static final Duration MAX_SEND_BACKOFF = Duration.ofMinutes(10);
 
+    /** Старше этого статус публикуется заново. С запасом до 48 часов, после которых его не удалить. */
+    static final Duration STATUS_MAX_AGE = Duration.ofHours(24);
+
     private final TelegramClient telegramClient;
     private final AccountRepository repository;
+    private final MessageJanitor janitor;
     private Clock clock = Clock.systemUTC();
 
     @Autowired
-    public StatusBoard(TelegramClient telegramClient, AccountRepository repository) {
+    public StatusBoard(TelegramClient telegramClient, AccountRepository repository, MessageJanitor janitor) {
         this.telegramClient = telegramClient;
         this.repository = repository;
+        this.janitor = janitor;
     }
 
     /** Для тестов: управляемые часы, чтобы проверять паузы без ожидания. */
-    StatusBoard(TelegramClient telegramClient, AccountRepository repository, Clock clock) {
-        this(telegramClient, repository);
+    StatusBoard(TelegramClient telegramClient, AccountRepository repository, MessageJanitor janitor, Clock clock) {
+        this(telegramClient, repository, janitor);
         this.clock = clock;
     }
 
@@ -73,6 +83,10 @@ public class StatusBoard {
             }
             if (board.statusMessageId() == null) {
                 createStatus(session, statusText);
+                return;
+            }
+            if (isStale(board)) {
+                rotateStatus(session, statusText);
                 return;
             }
             if (statusText.equals(board.renderedStatus())) {
@@ -158,11 +172,36 @@ public class StatusBoard {
         }
     }
 
+    /** Возраст статуса неизвестен (после миграции или импорта) — считаем его устаревшим. */
+    private boolean isStale(AccountSession.Board board) {
+        Instant postedAt = board.statusPostedAt();
+        return postedAt == null || now().isAfter(postedAt.plus(STATUS_MAX_AGE));
+    }
+
+    /**
+     * Публикует статус заново, пока прежний ещё можно удалить. Сначала отправка и только потом
+     * удаление: если отправка не прошла, прежний статус остаётся и его продолжат править.
+     */
+    private void rotateStatus(AccountSession session, String statusText) {
+        AccountSession.Board board = session.board();
+        Long previous = board.statusMessageId();
+        log.info("Статус {} устарел, публикую новый", session);
+        createStatus(session, statusText);
+        if (!previous.equals(board.statusMessageId())) {
+            deleteMessage(session.chatId(), previous);
+        }
+    }
+
+    /**
+     * Публикует статус. Id в доске меняется только при успехе: при отказе остаётся то, что было
+     * (при ротации — прежний статус, в остальных случаях — {@code null}).
+     */
     private void createStatus(AccountSession session, String statusText) {
         AccountSession.Board board = session.board();
-        TelegramResult result = telegramClient.sendMessage(session.chatId(), statusText);
-        board.setStatusMessageId(result.messageId());
+        TelegramResult result = telegramClient.sendSilently(session.chatId(), statusText);
         if (result.ok()) {
+            board.setStatusMessageId(result.messageId());
+            board.setStatusPostedAt(now());
             board.setRenderedStatus(statusText);
             board.markDelivered();
         } else {
@@ -207,7 +246,7 @@ public class StatusBoard {
     private void dropStatus(AccountSession session) {
         AccountSession.Board board = session.board();
         if (board.statusMessageId() != null) {
-            telegramClient.deleteMessage(session.chatId(), board.statusMessageId());
+            deleteMessage(session.chatId(), board.statusMessageId());
             board.setStatusMessageId(null);
             board.setRenderedStatus(null);
         }
@@ -216,8 +255,20 @@ public class StatusBoard {
     private void dropAlert(AccountSession session) {
         AccountSession.Board board = session.board();
         if (board.alertMessageId() != null) {
-            telegramClient.deleteMessage(session.chatId(), board.alertMessageId());
+            deleteMessage(session.chatId(), board.alertMessageId());
             board.setAlert(null, null);
+        }
+    }
+
+    /**
+     * Удаляет сообщение бота. Id после этого забывается, поэтому если Telegram отказал по
+     * временной причине (429, сеть), сообщение отдаётся уборщику — иначе оно осталось бы
+     * в чате замороженным. Остальные отказы окончательны: сообщения уже нет или оно старше 48 часов.
+     */
+    private void deleteMessage(long chatId, long messageId) {
+        TelegramResult result = telegramClient.deleteMessage(chatId, messageId);
+        if (result.isRateLimited() || result.isTransportFailure()) {
+            janitor.expire(chatId, messageId, Duration.ZERO);
         }
     }
 
@@ -229,8 +280,8 @@ public class StatusBoard {
         }
         AccountSession.Board board = session.board();
         try {
-            repository.saveBoard(session.accountId(), board.statusMessageId(), board.alertMessageId(),
-                    board.alertKind());
+            repository.saveBoard(session.accountId(), board.statusMessageId(), board.statusPostedAt(),
+                    board.alertMessageId(), board.alertKind());
         } catch (DataAccessException e) {
             log.error("Не удалось сохранить id сообщений {}: {}", session, e.toString());
         }

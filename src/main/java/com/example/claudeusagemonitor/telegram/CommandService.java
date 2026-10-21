@@ -23,6 +23,9 @@ import tools.jackson.databind.JsonNode;
  * id пользователя и однозначно задаёт, чей это аккаунт. Без одобренной заявки доступны
  * только /register, /chatid и /help — остальное получает короткий отказ без каких-либо
  * данных, чтобы посторонний не узнал даже, есть ли в боте другие пользователи.
+ *
+ * <p>Чат должен оставаться чистым: сообщение с командой удаляется сразу, а ответы бота
+ * уходят через {@link MessageJanitor} и исчезают сами. Постоянно в чате живёт только статус.
  */
 @Service
 public class CommandService {
@@ -59,14 +62,16 @@ public class CommandService {
     private final AccountService accounts;
     private final AlertService alertService;
     private final TelegramClient telegramClient;
+    private final MessageJanitor janitor;
 
     public CommandService(AccountRepository repository, RegistrationService registration, AccountService accounts,
-                          AlertService alertService, TelegramClient telegramClient) {
+                          AlertService alertService, TelegramClient telegramClient, MessageJanitor janitor) {
         this.repository = repository;
         this.registration = registration;
         this.accounts = accounts;
         this.alertService = alertService;
         this.telegramClient = telegramClient;
+        this.janitor = janitor;
     }
 
     /** Разбирает апдейт Telegram: сообщение с командой или нажатие inline-кнопки. */
@@ -110,6 +115,9 @@ public class CommandService {
                         ⚠️ Не удалось удалить сообщение с токеном — он виден в чате, удалите его сами. \
                         Если бот токен не принял, считайте его скомпрометированным и сделайте новый логин.""");
             }
+        } else if (privateChat && !edited && isCommand(command)) {
+            // Сама команда в чате не нужна: за неё говорят ответ бота или обновлённый статус
+            telegramClient.deleteMessage(chatId, messageId);
         }
         if (edited && !command.equals("/token")) {
             return;
@@ -121,18 +129,18 @@ public class CommandService {
         }
 
         switch (command) {
-            case "/chatid" -> telegramClient.sendMessage(chatId, "ID чата: <code>%d</code>".formatted(chatId));
-            case "/start", "/help" -> telegramClient.sendMessage(chatId, help(privateChat ? chatId : null));
+            case "/chatid" -> janitor.reply(chatId, "ID чата: <code>%d</code>".formatted(chatId));
+            case "/start", "/help" -> janitor.reply(chatId, help(privateChat ? chatId : null));
             case "/register" -> {
                 if (privateChat) {
                     registration.register(applicant(message));
                 } else {
-                    telegramClient.sendMessage(chatId, "Регистрация — только в личных сообщениях с ботом.");
+                    janitor.reply(chatId, "Регистрация — только в личных сообщениях с ботом.");
                 }
             }
             default -> {
                 if (!privateChat) {
-                    telegramClient.sendMessage(chatId, PRIVATE_ONLY);
+                    janitor.reply(chatId, PRIVATE_ONLY);
                     return;
                 }
                 handleApproved(chatId, command, argument);
@@ -145,7 +153,7 @@ public class CommandService {
         Optional<Account> found = repository.findByChatId(chatId).filter(Account::isApproved);
         if (found.isEmpty()) {
             if (isKnown(command)) {
-                telegramClient.sendMessage(chatId, DENIED);
+                janitor.reply(chatId, DENIED);
             }
             return;
         }
@@ -153,24 +161,33 @@ public class CommandService {
         switch (command) {
             case "/status" -> status(account);
             case "/token" -> accounts.connect(account, argument);
-            case "/forget" -> telegramClient.sendMessage(chatId, accounts.forget(account));
+            case "/forget" -> janitor.reply(chatId, accounts.forget(account));
             case "/users", "/revoke" -> {
                 if (!account.isAdmin()) {
-                    telegramClient.sendMessage(chatId, "⛔ Команда только для администратора.");
+                    janitor.reply(chatId, "⛔ Команда только для администратора.");
                 } else if (command.equals("/users")) {
-                    telegramClient.sendMessage(chatId, registration.users());
+                    janitor.reply(chatId, registration.users());
                 } else {
-                    telegramClient.sendMessage(chatId, registration.revoke(account, argument));
+                    janitor.reply(chatId, registration.revoke(account, argument));
                 }
             }
             default -> { /* прочие сообщения игнорируем */ }
         }
     }
 
+    /** Команды, для которых нужна одобренная заявка. */
     private static boolean isKnown(String command) {
         return switch (command) {
             case "/status", "/token", "/forget", "/users", "/revoke" -> true;
             default -> false;
+        };
+    }
+
+    /** Все команды, на которые бот отвечает. Чужие слэш-сообщения он не трогает. */
+    private static boolean isCommand(String command) {
+        return switch (command) {
+            case "/chatid", "/start", "/help", "/register" -> true;
+            default -> isKnown(command);
         };
     }
 
@@ -189,7 +206,7 @@ public class CommandService {
             // при старте база была недоступна)
             reply = "⏳ Мониторинг запускается — статус появится после ближайшего опроса.";
         }
-        telegramClient.sendMessage(account.chatId(), reply);
+        janitor.reply(account.chatId(), reply);
     }
 
     private String help(Long privateChatId) {

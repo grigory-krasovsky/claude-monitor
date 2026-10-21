@@ -38,6 +38,7 @@ public abstract class DatabaseTest {
         sessions.all().stream().map(AccountSession::chatId).forEach(sessions::detach);
         jdbc.sql("delete from account").update();
         jdbc.sql("delete from legacy_import").update();
+        jdbc.sql("delete from temporary_message").update();
         telegram.reset();
         tokenProvider.exchanged.clear();
         tokenProvider.behaviour = token -> new com.example.claudeusagemonitor.usage.TokenProvider.TokenGrant(
